@@ -1,4 +1,5 @@
-import { WORKER_BODY, WORKER_COST, WORKERS_PER_SOURCE } from '../types';
+import { WORKER_BODY, WORKER_COST } from '../types';
+import { countMiningPositions } from '../utils/positions';
 
 /**
  * Generate creep name: first letter of role + last digit of Game.time.
@@ -50,9 +51,8 @@ export function runSpawnManager(room: Room): void {
     (c) => c.memory.role === 'worker' && c.room.name === room.name
   );
   
-  // Calculate max workers (2 per source)
-  const sources = room.find(FIND_SOURCES);
-  const maxWorkers = sources.length * WORKERS_PER_SOURCE;
+  // Calculate max workers based on available mining positions
+  const maxWorkers = countMiningPositions(room);
 
   // Spawn if under cap
   if (workers.length < maxWorkers) {

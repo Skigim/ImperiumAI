@@ -1,11 +1,11 @@
 import './types';
 import { releasePosition } from './utils/positions';
-import { runSpawnManager } from './managers/spawnManager';
-import { runTrafficManager } from './managers/trafficManager';
-import { runWorker } from './roles/worker';
+import { getKernel, isKernelInitialized } from './kernel';
+import { ColdBootProcess } from './processes';
 
 /**
  * Main game loop - called every tick by Screeps engine.
+ * The kernel manages all process scheduling and execution.
  */
 export function loop(): void {
   // Memory cleanup - remove dead creeps and release their positions
@@ -16,31 +16,48 @@ export function loop(): void {
     Memory.rooms = {};
   }
 
-  // Run for each owned room
+  // Initialize kernel memory
+  if (!Memory.kernel) {
+    Memory.kernel = {
+      registeredProcesses: [],
+      lastTick: Game.time,
+    };
+  }
+
+  // Get or create kernel instance
+  const kernel = getKernel();
+
+  // Register processes after global reset or for new rooms
+  if (!isKernelInitialized()) {
+    initializeProcesses(kernel);
+  }
+
+  // Run all registered processes
+  kernel.run();
+
+  // Update kernel memory
+  Memory.kernel.lastTick = Game.time;
+}
+
+/**
+ * Initialize and register all processes with the kernel.
+ * Called after global reset or when kernel needs reinitialization.
+ */
+function initializeProcesses(kernel: ReturnType<typeof getKernel>): void {
+  console.log('Initializing kernel processes...');
+
+  // Register cold boot process for each owned RCL 1-2 room
   for (const roomName in Game.rooms) {
     const room = Game.rooms[roomName];
     
-    // Only process rooms we own
-    if (!room.controller?.my) continue;
-
-    // Cold boot phase: RCL 1-2
-    if (room.controller.level <= 2) {
-      runSpawnManager(room);
+    if (room.controller?.my && room.controller.level <= 2) {
+      const process = new ColdBootProcess(roomName);
+      kernel.register(process);
+      console.log(`Registered: ${process.name}`);
     }
   }
 
-  // Run all creeps
-  for (const name in Game.creeps) {
-    const creep = Game.creeps[name];
-
-    // Traffic management (stuck detection)
-    runTrafficManager(creep);
-
-    // Role execution
-    if (creep.memory.role === 'worker') {
-      runWorker(creep);
-    }
-  }
+  console.log(`Kernel initialized with ${kernel.processCount} processes`);
 }
 
 /**

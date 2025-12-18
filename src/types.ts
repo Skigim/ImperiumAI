@@ -7,6 +7,14 @@ declare global {
 
   interface Memory {
     rooms: { [roomName: string]: RoomMemory };
+    kernel?: KernelMemory;
+  }
+
+  interface KernelMemory {
+    /** IDs of processes that should be registered on global reset */
+    registeredProcesses: string[];
+    /** Last tick the kernel ran */
+    lastTick: number;
   }
 
   interface RoomMemory {
@@ -35,6 +43,5 @@ export interface Position {
 
 export const WORKER_BODY: BodyPartConstant[] = [WORK, CARRY, MOVE, MOVE];
 export const WORKER_COST = 250;
-export const WORKERS_PER_SOURCE = 2;
 export const STUCK_THRESHOLD = 3;
 export const NEEDY_SPAWN_THRESHOLD = 0.5; // 50% capacity

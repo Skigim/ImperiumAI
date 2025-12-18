@@ -1,6 +1,21 @@
 import { NEEDY_SPAWN_THRESHOLD } from '../types';
 
 /**
+ * Count total walkable mining positions across all sources in a room.
+ * This determines the maximum number of workers that can harvest simultaneously.
+ */
+export function countMiningPositions(room: Room): number {
+  const sources = room.find(FIND_SOURCES);
+  let total = 0;
+  
+  for (const source of sources) {
+    total += sourcePos(room, source).length;
+  }
+  
+  return total;
+}
+
+/**
  * Find an unassigned walkable position at range 1 of a valid source.
  * Valid source = source with less than 2 creeps assigned.
  */
@@ -19,7 +34,7 @@ export function findAssignedPosition(room: Room): { pos: RoomPosition; sourceId:
 
   for (const source of sources) {
     // Get all walkable positions at range 1
-    const positions = getWalkablePositionsAroundSource(room, source);
+    const positions = sourcePos(room, source);
     
     for (const pos of positions) {
       const posKey = `${pos.x},${pos.y}`;
@@ -35,9 +50,9 @@ export function findAssignedPosition(room: Room): { pos: RoomPosition; sourceId:
 }
 
 /**
- * Get walkable (non-wall, non-structure) positions at range 1 of source.
+ * Get walkable (non-wall) positions at range 1 of source.
  */
-function getWalkablePositionsAroundSource(room: Room, source: Source): RoomPosition[] {
+export function sourcePos(room: Room, source: Source): RoomPosition[] {
   const positions: RoomPosition[] = [];
   const terrain = room.getTerrain();
 

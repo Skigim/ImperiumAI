@@ -3,7 +3,6 @@
   "version": "1.0.0",
   "description": "A self sufficient screeps AI with a high degree of customizability, manual interaction, and expandability.",
   "main": "dist/main.js",
-  "type": "module",
   "scripts": {
     "build": "rollup -c"
   },

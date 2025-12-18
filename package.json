@@ -1,0 +1,23 @@
+{
+  "name": "imperium-ai",
+  "version": "1.0.0",
+  "description": "A self sufficient screeps AI with a high degree of customizability, manual interaction, and expandability.",
+  "main": "dist/main.js",
+  "type": "module",
+  "scripts": {
+    "build": "rollup -c"
+  },
+  "keywords": [
+    "screeps"
+  ],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@rollup/plugin-node-resolve": "^15.2.3",
+    "@rollup/plugin-typescript": "^11.1.6",
+    "@types/screeps": "^3.3.8",
+    "rollup": "^4.9.6",
+    "tslib": "^2.6.2",
+    "typescript": "^5.3.3"
+  }
+}

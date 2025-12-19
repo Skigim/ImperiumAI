@@ -25,16 +25,24 @@ declare global {
     miningPositionCount?: number;
     /** Static data - upgrade positions around controller */
     upgradePositions?: { x: number; y: number }[];
+    /** RCL 2 development phase tracking */
+    rcl2Phase?: 1 | 2 | 3 | 4 | 5;
+    /** Container IDs for each source */
+    sourceContainers?: { [sourceId: string]: Id<StructureContainer> };
   }
 
   interface CreepMemory {
-    role: 'worker';
-    state: 'harvesting' | 'delivering';
+    role: 'worker' | 'miner' | 'hauler';
+    state: 'harvesting' | 'delivering' | 'mining' | 'hauling' | 'building';
     assignedPos?: { x: number; y: number; roomName: string };
     deliveryTarget?: 'spawn' | 'extension' | 'controller';
     stuckCount: number;
     lastPos?: { x: number; y: number };
     sourceId?: Id<Source>;
+    /** For haulers: which container to pickup from */
+    containerId?: Id<StructureContainer>;
+    /** For workers in building mode: what structure to build */
+    buildTarget?: Id<ConstructionSite>;
     // Movement system cache
     _move?: {
       path: Array<{ x: number; y: number }>;
@@ -47,16 +55,5 @@ declare global {
   }
 }
 
-export type WorkerState = 'harvesting' | 'delivering';
-export type DeliveryTarget = 'spawn' | 'extension' | 'controller';
-
-export interface Position {
-  x: number;
-  y: number;
-  roomName: string;
-}
-
-export const WORKER_BODY: BodyPartConstant[] = [WORK, CARRY, MOVE, MOVE];
-export const WORKER_COST = 250;
-export const STUCK_THRESHOLD = 3;
-export const NEEDY_SPAWN_THRESHOLD = 0.5; // 50% capacity
+// Empty export to make this a module (required for declare global)
+export {};

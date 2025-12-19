@@ -1,7 +1,6 @@
 import './types';
-import { releasePosition } from './utils/positions';
 import { getKernel, isKernelInitialized } from './kernel';
-import { ColdBootProcess } from './processes';
+import { RCL1Process, RCL2AProcess, RCL2BProcess } from './processes';
 
 /**
  * Main game loop - called every tick by Screeps engine.
@@ -46,14 +45,25 @@ export function loop(): void {
 function initializeProcesses(kernel: ReturnType<typeof getKernel>): void {
   console.log('Initializing kernel processes...');
 
-  // Register cold boot process for each owned RCL 1-2 room
   for (const roomName in Game.rooms) {
     const room = Game.rooms[roomName];
     
-    if (room.controller?.my && room.controller.level <= 2) {
-      const process = new ColdBootProcess(roomName);
+    if (!room.controller?.my) continue;
+
+    // RCL 1: Speedrun to RCL 2
+    if (room.controller.level === 1) {
+      const process = new RCL1Process(roomName);
       kernel.register(process);
       console.log(`Registered: ${process.name}`);
+    }
+    
+    // RCL 2: Register both A and B, they self-select via shouldRun()
+    if (room.controller.level === 2) {
+      const processA = new RCL2AProcess(roomName);
+      const processB = new RCL2BProcess(roomName);
+      kernel.register(processA);
+      kernel.register(processB);
+      console.log(`Registered: ${processA.name}, ${processB.name}`);
     }
   }
 
@@ -69,7 +79,15 @@ function cleanupMemory(): void {
       // Release assigned position before deleting memory
       const creepMemory = Memory.creeps[name];
       if (creepMemory.assignedPos) {
-        releasePosition(creepMemory.assignedPos.roomName, name);
+        const assignedPositions = Memory.rooms[creepMemory.assignedPos.roomName]?.assignedPositions;
+        if (assignedPositions) {
+          for (const posKey in assignedPositions) {
+            if (assignedPositions[posKey] === name) {
+              delete assignedPositions[posKey];
+              break;
+            }
+          }
+        }
       }
 
       delete Memory.creeps[name];

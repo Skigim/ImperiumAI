@@ -1,20 +1,30 @@
-import { findAssignedPosition, assignPosition, findNeedySpawn, findNeedyExtension } from '../utils/positions';
+import { findAssignedPosition, assignPosition, findNeedySpawn, findNeedyExtension, countMiningPositions } from '../utils/positions';
+import { getSpawns, getWorkerCount } from '../utils/cache';
+import { runUpgradeTask, TaskStatus } from '../tasks';
+import { moveToTarget, clearMovementCache } from '../utils/movement';
+
+// Temporary profiling
+let workerProfilingEnabled = true;
 
 /**
  * Run worker role logic.
  * States: harvesting → delivering → harvesting
  */
 export function runWorker(creep: Creep): void {
+  const startCpu = Game.cpu.getUsed();
+
   // State transition: empty → harvesting
   if (creep.memory.state === 'delivering' && creep.store.getUsedCapacity() === 0) {
     creep.memory.state = 'harvesting';
     delete creep.memory.deliveryTarget;
+    clearMovementCache(creep); // Clear path when changing states
   }
 
   // State transition: full → delivering (with target lock)
   if (creep.memory.state === 'harvesting' && creep.store.getFreeCapacity() === 0) {
     creep.memory.state = 'delivering';
     creep.memory.deliveryTarget = selectDeliveryTarget(creep);
+    clearMovementCache(creep); // Clear path when changing states
   }
 
   // Execute current state
@@ -22,6 +32,14 @@ export function runWorker(creep: Creep): void {
     runHarvesting(creep);
   } else {
     runDelivering(creep);
+  }
+
+  // Profile individual creeps
+  if (workerProfilingEnabled) {
+    const totalCpu = Game.cpu.getUsed() - startCpu;
+    if (totalCpu > 0.3) {
+      console.log(`[Worker] ${creep.name} state=${creep.memory.state} cpu=${totalCpu.toFixed(2)}`);
+    }
   }
 }
 
@@ -54,7 +72,7 @@ function runHarvesting(creep: Creep): void {
 
   // Move to assigned position
   if (!creep.pos.isEqualTo(assignedPos)) {
-    creep.moveTo(assignedPos, { reusePath: 50 });
+    moveToTarget(creep, assignedPos, 0);
     return;
   }
 
@@ -79,28 +97,58 @@ function runDelivering(creep: Creep): void {
     return;
   }
 
-  // Move to target and transfer
+  // Controller uses upgradeController at range 3 via task
+  if (creep.memory.deliveryTarget === 'controller') {
+    runUpgradeTask(creep);
+    // Task handles everything - movement, positioning, upgrading
+    // When complete (empty), the state transition at top of runWorker will switch to harvesting
+    return;
+  }
+
+  // Spawn/extension use transfer at range 1
   if (creep.pos.isNearTo(target)) {
     const result = creep.transfer(target, RESOURCE_ENERGY);
     
     // Target full - pick next priority (stay in delivering state)
     if (result === ERR_FULL) {
       creep.memory.deliveryTarget = selectNextDeliveryTarget(creep.memory.deliveryTarget!);
+      clearMovementCache(creep); // Clear path when target changes
     }
   } else {
-    creep.moveTo(target, { reusePath: 50 });
+    moveToTarget(creep, target.pos, 1);
   }
 }
 
 /**
  * Select initial delivery target based on priority.
- * Priority: needy spawn → extension → controller
+ * - If room not fully staffed: prioritize spawn (keep spawning workers)
+ * - If fully staffed: use needy spawn threshold, then extensions, then controller
  */
 function selectDeliveryTarget(creep: Creep): 'spawn' | 'extension' | 'controller' {
-  if (findNeedySpawn(creep.room)) {
-    return 'spawn';
+  const room = creep.room;
+  const spawns = getSpawns(room);
+  const spawn = spawns[0];
+  
+  if (spawn) {
+    // Count current workers vs available mining positions (cached)
+    const workerCount = getWorkerCount(room);
+    const maxWorkers = countMiningPositions(room);
+    const fullyStaffed = workerCount >= maxWorkers;
+
+    if (!fullyStaffed) {
+      // Not fully staffed - always fill spawn to keep spawning
+      if (spawn.store.getFreeCapacity(RESOURCE_ENERGY) > 0) {
+        return 'spawn';
+      }
+    } else {
+      // Fully staffed - only fill spawn if needy (below threshold)
+      if (findNeedySpawn(room)) {
+        return 'spawn';
+      }
+    }
   }
-  if (findNeedyExtension(creep.room)) {
+
+  if (findNeedyExtension(room)) {
     return 'extension';
   }
   return 'controller';

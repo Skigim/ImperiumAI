@@ -1,5 +1,6 @@
 import { WORKER_BODY, WORKER_COST } from '../types';
 import { countMiningPositions } from '../utils/positions';
+import { getSpawns, getWorkerCount } from '../utils/cache';
 
 /**
  * Generate creep name: first letter of role + last digit of Game.time.
@@ -32,10 +33,10 @@ function generateCreepName(role: string): string {
 
 /**
  * Run spawn manager for cold boot phase.
- * Spawns workers up to 2 per source.
+ * Spawns workers up to max mining positions.
  */
 export function runSpawnManager(room: Room): void {
-  const spawns = room.find(FIND_MY_SPAWNS);
+  const spawns = getSpawns(room);
   if (spawns.length === 0) return;
 
   const spawn = spawns[0];
@@ -46,16 +47,14 @@ export function runSpawnManager(room: Room): void {
   // Check energy
   if (room.energyAvailable < WORKER_COST) return;
 
-  // Count current workers
-  const workers = Object.values(Game.creeps).filter(
-    (c) => c.memory.role === 'worker' && c.room.name === room.name
-  );
+  // Count current workers (cached)
+  const workerCount = getWorkerCount(room);
   
-  // Calculate max workers based on available mining positions
+  // Calculate max workers based on available mining positions (from Memory)
   const maxWorkers = countMiningPositions(room);
 
   // Spawn if under cap
-  if (workers.length < maxWorkers) {
+  if (workerCount < maxWorkers) {
     const name = generateCreepName('worker');
     const result = spawn.spawnCreep(WORKER_BODY, name, {
       memory: {

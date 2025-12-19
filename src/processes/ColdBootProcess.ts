@@ -2,6 +2,7 @@ import { Process, ProcessPriority, ProcessResult } from '../kernel';
 import { runSpawnManager } from '../managers/spawnManager';
 import { runTrafficManager } from '../managers/trafficManager';
 import { runWorker } from '../roles/worker';
+import { getMyCreepsInRoom } from '../utils/cache';
 
 /**
  * ColdBootProcess handles room management for RCL 1-2 rooms.
@@ -58,22 +59,43 @@ export class ColdBootProcess implements Process {
       };
     }
 
-    // Spawn management - create workers up to 2 per source
-    runSpawnManager(room);
+    // CPU profiling
+    const cpuStart = Game.cpu.getUsed();
+    let lastCpu = cpuStart;
 
-    // Run all creeps in this room
-    const roomCreeps = Object.values(Game.creeps).filter(
-      (c) => c.room.name === this.roomName
-    );
+    // Spawn management - create workers up to max mining positions
+    runSpawnManager(room);
+    const spawnCpu = Game.cpu.getUsed() - lastCpu;
+    lastCpu = Game.cpu.getUsed();
+
+    // Run all creeps in this room (cached)
+    const roomCreeps = getMyCreepsInRoom(room);
+    const cacheCpu = Game.cpu.getUsed() - lastCpu;
+    lastCpu = Game.cpu.getUsed();
+
+    let trafficCpu = 0;
+    let workerCpu = 0;
 
     for (const creep of roomCreeps) {
+      const creepStart = Game.cpu.getUsed();
+      
       // Traffic management (stuck detection)
       runTrafficManager(creep);
-
+      trafficCpu += Game.cpu.getUsed() - creepStart;
+      
+      const workerStart = Game.cpu.getUsed();
       // Role execution
       if (creep.memory.role === 'worker') {
         runWorker(creep);
       }
+      workerCpu += Game.cpu.getUsed() - workerStart;
+    }
+
+    const totalCpu = Game.cpu.getUsed() - cpuStart;
+    
+    // Log breakdown if significant CPU used
+    if (totalCpu > 1.5) {
+      console.log(`[CPU] ${this.name}: spawn=${spawnCpu.toFixed(2)}, cache=${cacheCpu.toFixed(2)}, traffic=${trafficCpu.toFixed(2)}, worker=${workerCpu.toFixed(2)}, total=${totalCpu.toFixed(2)}`);
     }
 
     return {

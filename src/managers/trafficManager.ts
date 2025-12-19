@@ -1,99 +1,57 @@
-import { STUCK_THRESHOLD } from '../types';
+import { getSpawns, getExtensions } from '../utils/cache';
 
 /**
- * Check if creep is stuck and handle path invalidation.
- * Stuck = same position for 3+ ticks while not harvesting and fatigue is 0.
+ * Check if creep is actively working (and expected to be stationary).
  */
-export function runTrafficManager(creep: Creep): void {
-  const currentPos = { x: creep.pos.x, y: creep.pos.y };
-
-  // Skip if harvesting (expected to stay in place)
+function isCreepWorking(creep: Creep): boolean {
+  // Harvesting at assigned position
   if (creep.memory.state === 'harvesting' && creep.memory.assignedPos) {
     const assignedPos = creep.memory.assignedPos;
     if (creep.pos.x === assignedPos.x && creep.pos.y === assignedPos.y) {
-      // At assigned position, not stuck
-      creep.memory.stuckCount = 0;
-      creep.memory.lastPos = currentPos;
-      return;
+      return true;
     }
   }
 
-  // Skip if fatigued (can't move anyway)
-  if (creep.fatigue > 0) {
-    creep.memory.lastPos = currentPos;
-    return;
-  }
-
-  // Check if position changed
-  if (creep.memory.lastPos) {
-    const lastPos = creep.memory.lastPos;
-    
-    if (currentPos.x === lastPos.x && currentPos.y === lastPos.y) {
-      // Same position - increment stuck counter
-      creep.memory.stuckCount = (creep.memory.stuckCount || 0) + 1;
-
-      // Stuck threshold reached - invalidate path
-      if (creep.memory.stuckCount >= STUCK_THRESHOLD) {
-        // Force re-path by moving with reusePath: 0
-        forceRepath(creep);
-        creep.memory.stuckCount = 0;
+  // Delivering to a target
+  if (creep.memory.state === 'delivering') {
+    switch (creep.memory.deliveryTarget) {
+      case 'spawn': {
+        const spawns = getSpawns(creep.room);
+        if (spawns.length > 0 && creep.pos.isNearTo(spawns[0])) {
+          return true;
+        }
+        break;
       }
-    } else {
-      // Position changed - reset counter
-      creep.memory.stuckCount = 0;
+      case 'extension': {
+        const extensions = getExtensions(creep.room);
+        for (const ext of extensions) {
+          if (creep.pos.isNearTo(ext) && ext.store.getFreeCapacity(RESOURCE_ENERGY) > 0) {
+            return true;
+          }
+        }
+        break;
+      }
+      case 'controller': {
+        const controller = creep.room.controller;
+        if (controller && creep.pos.inRangeTo(controller, 3)) {
+          return true;
+        }
+        break;
+      }
     }
   }
 
-  // Update last position
-  creep.memory.lastPos = currentPos;
+  return false;
 }
 
 /**
- * Force a new path calculation by moving with no path reuse.
+ * Lightweight traffic manager - just tracks working state.
+ * Stuck detection is now handled by the movement system (moveToTarget).
  */
-function forceRepath(creep: Creep): void {
-  // Get current movement target based on state
-  let target: RoomPosition | null = null;
-
-  if (creep.memory.state === 'harvesting' && creep.memory.assignedPos) {
-    target = new RoomPosition(
-      creep.memory.assignedPos.x,
-      creep.memory.assignedPos.y,
-      creep.memory.assignedPos.roomName
-    );
-  } else if (creep.memory.state === 'delivering') {
-    target = getDeliveryTargetPos(creep);
+export function runTrafficManager(creep: Creep): void {
+  // Reset stuck count when creep is working (stationary by design)
+  if (isCreepWorking(creep)) {
+    creep.memory.stuckCount = 0;
   }
-
-  if (target) {
-    // Move with fresh path calculation
-    creep.moveTo(target, { reusePath: 0 });
-    console.log(`${creep.name} was stuck, recalculating path`);
-  }
-}
-
-/**
- * Get the position of current delivery target.
- */
-function getDeliveryTargetPos(creep: Creep): RoomPosition | null {
-  const room = creep.room;
-
-  switch (creep.memory.deliveryTarget) {
-    case 'spawn': {
-      const spawns = room.find(FIND_MY_SPAWNS);
-      return spawns.length > 0 ? spawns[0].pos : null;
-    }
-    case 'extension': {
-      const extensions = room.find(FIND_MY_STRUCTURES, {
-        filter: (s): s is StructureExtension =>
-          s.structureType === STRUCTURE_EXTENSION &&
-          s.store.getFreeCapacity(RESOURCE_ENERGY) > 0
-      });
-      return extensions.length > 0 ? extensions[0].pos : null;
-    }
-    case 'controller':
-      return room.controller?.pos ?? null;
-    default:
-      return null;
-  }
+  // Movement system handles stuck detection via _stuck in creep memory
 }

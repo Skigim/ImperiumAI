@@ -19,6 +19,12 @@ declare global {
 
   interface RoomMemory {
     assignedPositions?: { [posKey: string]: string }; // posKey -> creepName
+    /** Static data - mining positions per source (persists, terrain-based) */
+    miningPositions?: { [sourceId: string]: { x: number; y: number }[] };
+    /** Total count of mining positions in room */
+    miningPositionCount?: number;
+    /** Static data - upgrade positions around controller */
+    upgradePositions?: { x: number; y: number }[];
   }
 
   interface CreepMemory {
@@ -29,6 +35,15 @@ declare global {
     stuckCount: number;
     lastPos?: { x: number; y: number };
     sourceId?: Id<Source>;
+    // Movement system cache
+    _move?: {
+      path: Array<{ x: number; y: number }>;
+      dest: { x: number; y: number; roomName: string };
+      tick: number;
+      idx: number;
+    };
+    _lastPos?: { x: number; y: number };
+    _stuck?: number;
   }
 }
 

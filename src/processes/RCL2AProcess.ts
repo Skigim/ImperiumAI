@@ -1,15 +1,19 @@
 import { Process, ProcessPriority, ProcessResult } from '../kernel';
+import { buildRemoteWorkerBody, buildFillerBody, buildLocalWorkerBody, getBodyCost, countMiningPositions } from '../lib';
+import { runWorker, runFiller, runRemoteWorker } from '../roles';
 
 /**
- * RCL2AProcess - Extension Rush
+ * RCL2AProcess - Extension Rush with Remote Mining
  * 
  * Goal: Build 5 extensions as fast as possible to unlock 550 energy capacity.
- * - Spawn workers up to available mining positions
- * - Workers: harvest → fill spawn → build extensions
- * - Upgrade controller only if at risk of downgrade (< 1000 ticks)
- * - Hands off to RCL2BProcess once all 5 extensions are built
  * 
- * Self-contained: No external managers or utilities.
+ * Creep Roles:
+ * - Filler (1): Dedicated to keeping spawn/extensions full
+ * - Workers: Local harvesters that build extensions
+ * - Remote Workers: Harvest from adjacent rooms once local is saturated
+ * 
+ * Upgrade controller only if at risk of downgrade (< 1000 ticks)
+ * Hands off to RCL2BProcess once all 5 extensions are built
  */
 export class RCL2AProcess implements Process {
   readonly id: string;
@@ -19,10 +23,8 @@ export class RCL2AProcess implements Process {
   private readonly roomName: string;
 
   // Constants
-  private static readonly WORKER_BODY: BodyPartConstant[] = [WORK, CARRY, MOVE, MOVE];
-  private static readonly WORKER_COST = 250;
   private static readonly MAX_EXTENSIONS = 5;
-  private static readonly DOWNGRADE_THRESHOLD = 1000; // ticks until downgrade warning
+  private static readonly DOWNGRADE_THRESHOLD = 1000;
 
   constructor(roomName: string) {
     this.roomName = roomName;
@@ -38,7 +40,6 @@ export class RCL2AProcess implements Process {
     if (!room || !room.controller?.my) return false;
     if (room.controller.level !== 2) return false;
     
-    // Count built extensions
     const extensions = room.find(FIND_MY_STRUCTURES, {
       filter: s => s.structureType === STRUCTURE_EXTENSION
     });
@@ -69,38 +70,50 @@ export class RCL2AProcess implements Process {
       filter: s => s.structureType === STRUCTURE_EXTENSION
     });
 
-    // Place ONE extension construction site only when none exist (focus on completing one at a time)
+    // Place ONE extension construction site when none exist
     if (extensionSites.length === 0 && builtExtensions.length < RCL2AProcess.MAX_EXTENSIONS) {
-      this.placeExtensions(room, spawn, builtExtensions.length);
+      this.placeExtension(room, spawn, builtExtensions.length);
     }
 
-    // Get workers
+    // Get creeps by role
     const workers = room.find(FIND_MY_CREEPS).filter(c => c.memory.role === 'worker');
+    const fillers = room.find(FIND_MY_CREEPS).filter(c => c.memory.role === 'filler');
+    const remoteWorkers = Object.values(Game.creeps).filter(
+      c => c.memory.role === 'remoteWorker' && c.memory.homeRoom === this.roomName
+    );
 
-    // Spawn workers up to mining positions
-    const maxWorkers = this.countMiningPositions(room);
-    this.runSpawning(spawn, workers.length, maxWorkers);
+    // Spawn logic - reserve 1 mining position per filler
+    const maxLocalWorkers = countMiningPositions(room) - fillers.length;
+    const isFullyStaffed = workers.length >= maxLocalWorkers && fillers.length >= 1;
+    this.runSpawning(spawn, workers.length, fillers.length, maxLocalWorkers, room.energyCapacityAvailable);
 
-    // Check if controller at risk of downgrade
+    // Prepare context for role behaviors
     const needsUpgrade = room.controller.ticksToDowngrade < RCL2AProcess.DOWNGRADE_THRESHOLD;
+    const workerCtx = { spawn, controller: room.controller, extensionSites, needsUpgrade, isFullyStaffed };
+    const fillerCtx = { spawn, controller: room.controller };
+    const remoteCtx = { homeSpawn: spawn, controller: room.controller, extensionSites, needsUpgrade };
 
-    // Run each worker
-    for (const creep of workers) {
-      this.runWorker(creep, spawn, room.controller, extensionSites, needsUpgrade);
+    // Run creeps using role behaviors
+    for (const filler of fillers) {
+      runFiller(filler, fillerCtx);
+    }
+    for (const worker of workers) {
+      runWorker(worker, workerCtx);
+    }
+    for (const remote of remoteWorkers) {
+      runRemoteWorker(remote, remoteCtx);
     }
 
     return {
       success: true,
-      message: `Extension rush: ${builtExtensions.length}/${RCL2AProcess.MAX_EXTENSIONS} built, ${workers.length} workers`,
+      message: `Extension rush: ${builtExtensions.length}/${RCL2AProcess.MAX_EXTENSIONS}, W:${workers.length} F:${fillers.length} R:${remoteWorkers.length}`,
     };
   }
 
   /**
    * Place ONE extension construction site near spawn.
-   * Only places next one when no sites exist (previous completed).
    */
-  private placeExtensions(room: Room, spawn: StructureSpawn, existingCount: number): void {
-    // Simple placement: spiral out from spawn
+  private placeExtension(room: Room, spawn: StructureSpawn, existingCount: number): void {
     const positions = [
       { x: spawn.pos.x + 2, y: spawn.pos.y },
       { x: spawn.pos.x - 2, y: spawn.pos.y },
@@ -109,161 +122,121 @@ export class RCL2AProcess implements Process {
       { x: spawn.pos.x + 2, y: spawn.pos.y + 2 },
     ];
 
-    // Only place one at a time
     const pos = positions[existingCount];
     if (!pos) return;
-    
-    // Check if position is valid (not a wall)
+
     const terrain = room.getTerrain();
     if (terrain.get(pos.x, pos.y) !== TERRAIN_MASK_WALL) {
       const result = room.createConstructionSite(pos.x, pos.y, STRUCTURE_EXTENSION);
       if (result === OK) {
-        console.log(`[RCL2A] Placed extension site ${existingCount + 1}/${RCL2AProcess.MAX_EXTENSIONS} at (${pos.x}, ${pos.y})`);
+        console.log(`[RCL2A] Placed extension site ${existingCount + 1}/${RCL2AProcess.MAX_EXTENSIONS}`);
       }
     }
   }
 
   /**
-   * Count available mining positions around sources.
+   * Spawn creeps with priority: Filler > Workers > Remote Workers
    */
-  private countMiningPositions(room: Room): number {
-    // Cache in memory
-    if (room.memory.miningPositionCount !== undefined) {
-      return room.memory.miningPositionCount;
+  private runSpawning(
+    spawn: StructureSpawn,
+    workerCount: number,
+    fillerCount: number,
+    maxLocalWorkers: number,
+    energyCapacity: number
+  ): void {
+    if (spawn.spawning) return;
+
+    const energyAvailable = spawn.room.energyAvailable;
+
+    // Priority 1: Filler
+    if (fillerCount === 0) {
+      const body = buildFillerBody(energyCapacity);
+      const cost = getBodyCost(body);
+      if (energyAvailable >= cost) {
+        const name = `F${Game.time % 1000}`;
+        if (spawn.spawnCreep(body, name, {
+          memory: { role: 'filler', state: 'harvesting', stuckCount: 0 }
+        }) === OK) {
+          console.log(`[RCL2A] Spawning filler: ${name}`);
+        }
+      }
+      return;
     }
 
-    const sources = room.find(FIND_SOURCES);
-    const terrain = room.getTerrain();
-    let count = 0;
+    // Priority 2: Local workers
+    if (workerCount < maxLocalWorkers) {
+      const body = buildLocalWorkerBody(energyCapacity);
+      const cost = getBodyCost(body);
+      if (energyAvailable >= cost) {
+        const name = `W${Game.time % 1000}`;
+        if (spawn.spawnCreep(body, name, {
+          memory: { role: 'worker', state: 'harvesting', stuckCount: 0 }
+        }) === OK) {
+          console.log(`[RCL2A] Spawning worker: ${name}`);
+        }
+      }
+      return;
+    }
 
-    for (const source of sources) {
-      for (let dx = -1; dx <= 1; dx++) {
-        for (let dy = -1; dy <= 1; dy++) {
-          if (dx === 0 && dy === 0) continue;
-          const x = source.pos.x + dx;
-          const y = source.pos.y + dy;
-          if (terrain.get(x, y) !== TERRAIN_MASK_WALL) {
-            count++;
+    // Priority 3: Remote workers - wait for full capacity for best body
+    const targetRoom = this.findAdjacentRoomNeedingWorkers(spawn.room);
+    if (targetRoom) {
+      const body = buildRemoteWorkerBody(energyCapacity);
+      const cost = getBodyCost(body);
+      // Wait for full capacity so filler can fill extensions first
+      if (energyAvailable >= energyCapacity) {
+        const name = `R${Game.time % 1000}`;
+        if (spawn.spawnCreep(body, name, {
+          memory: {
+            role: 'remoteWorker',
+            state: 'harvesting',
+            stuckCount: 0,
+            homeRoom: this.roomName,
+            targetRoom: targetRoom,
           }
+        }) === OK) {
+          console.log(`[RCL2A] Spawning remote worker: ${name} -> ${targetRoom}`);
         }
       }
     }
-
-    room.memory.miningPositionCount = count;
-    return count;
   }
 
   /**
-   * Spawn workers if under cap.
+   * Find an adjacent room that needs more workers.
    */
-  private runSpawning(spawn: StructureSpawn, currentCount: number, maxWorkers: number): void {
-    if (spawn.spawning) return;
-    if (currentCount >= maxWorkers) return;
-    if (spawn.room.energyAvailable < RCL2AProcess.WORKER_COST) return;
+  private findAdjacentRoomNeedingWorkers(room: Room): string | null {
+    const exits = Game.map.describeExits(room.name);
+    if (!exits) return null;
 
-    const name = `W${Game.time % 1000}`;
-    const result = spawn.spawnCreep(RCL2AProcess.WORKER_BODY, name, {
-      memory: {
-        role: 'worker',
-        state: 'harvesting',
-        stuckCount: 0,
+    // Count current remote workers per room
+    const workersByRoom: Record<string, number> = {};
+    for (const creep of Object.values(Game.creeps)) {
+      if (creep.memory.role === 'remoteWorker' && creep.memory.homeRoom === this.roomName) {
+        const target = creep.memory.targetRoom!;
+        workersByRoom[target] = (workersByRoom[target] || 0) + 1;
       }
-    });
-
-    if (result === OK) {
-      console.log(`[RCL2A] Spawning worker: ${name}`);
-    }
-  }
-
-  /**
-   * Run worker logic: harvest → fill spawn/extensions → build extensions → upgrade (if needed)
-   */
-  private runWorker(
-    creep: Creep,
-    spawn: StructureSpawn,
-    controller: StructureController,
-    extensionSites: ConstructionSite[],
-    needsUpgrade: boolean
-  ): void {
-    // State transitions
-    if (creep.memory.state === 'harvesting' && creep.store.getFreeCapacity() === 0) {
-      creep.memory.state = 'delivering';
-    }
-    if (creep.memory.state === 'delivering' && creep.store.getUsedCapacity() === 0) {
-      creep.memory.state = 'harvesting';
     }
 
-    // Execute state
-    if (creep.memory.state === 'harvesting') {
-      this.doHarvest(creep);
-    } else {
-      this.doDeliver(creep, spawn, controller, extensionSites, needsUpgrade);
-    }
-  }
+    // Find room needing workers
+    for (const dir of ['1', '3', '5', '7'] as const) {
+      const adjacentRoomName = exits[dir];
+      if (!adjacentRoomName) continue;
 
-  /**
-   * Harvest from nearest source.
-   */
-  private doHarvest(creep: Creep): void {
-    const source = creep.pos.findClosestByPath(FIND_SOURCES_ACTIVE);
-    if (!source) return;
+      const currentWorkers = workersByRoom[adjacentRoomName] || 0;
+      const adjacentRoom = Game.rooms[adjacentRoomName];
 
-    if (creep.harvest(source) === ERR_NOT_IN_RANGE) {
-      creep.moveTo(source, { reusePath: 5 });
-    }
-  }
-
-  /**
-   * Deliver energy with priority: spawn/extensions → build extensions → upgrade (if needed)
-   */
-  private doDeliver(
-    creep: Creep,
-    spawn: StructureSpawn,
-    controller: StructureController,
-    extensionSites: ConstructionSite[],
-    needsUpgrade: boolean
-  ): void {
-    // Priority 1: Fill spawn
-    if (spawn.store.getFreeCapacity(RESOURCE_ENERGY) > 0) {
-      if (creep.transfer(spawn, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
-        creep.moveTo(spawn, { reusePath: 5 });
+      if (adjacentRoom) {
+        const maxWorkers = countMiningPositions(adjacentRoom);
+        if (currentWorkers < maxWorkers) {
+          return adjacentRoomName;
+        }
+      } else {
+        // No visibility - send 1 scout
+        if (currentWorkers === 0) {
+          return adjacentRoomName;
+        }
       }
-      return;
     }
-
-    // Priority 2: Fill extensions
-    const needyExtension = creep.pos.findClosestByPath(FIND_MY_STRUCTURES, {
-      filter: (s): s is StructureExtension => 
-        s.structureType === STRUCTURE_EXTENSION && 
-        s.store.getFreeCapacity(RESOURCE_ENERGY) > 0
-    });
-    if (needyExtension) {
-      if (creep.transfer(needyExtension, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
-        creep.moveTo(needyExtension, { reusePath: 5 });
-      }
-      return;
-    }
-
-    // Priority 3: Build extension construction sites
-    const site = creep.pos.findClosestByPath(extensionSites);
-    if (site) {
-      if (creep.build(site) === ERR_NOT_IN_RANGE) {
-        creep.moveTo(site, { reusePath: 5, range: 3 });
-      }
-      return;
-    }
-
-    // Priority 4: Upgrade controller (only if at risk of downgrade)
-    if (needsUpgrade) {
-      if (creep.upgradeController(controller) === ERR_NOT_IN_RANGE) {
-        creep.moveTo(controller, { reusePath: 5, range: 3 });
-      }
-      return;
-    }
-
-    // Nothing to do - idle near spawn
-    if (!creep.pos.inRangeTo(spawn, 3)) {
-      creep.moveTo(spawn, { reusePath: 5, range: 3 });
-    }
+    return null;
   }
 }

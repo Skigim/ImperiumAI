@@ -32,13 +32,17 @@ declare global {
   }
 
   interface CreepMemory {
-    role: 'worker' | 'miner' | 'hauler';
+    role: 'worker' | 'miner' | 'hauler' | 'filler' | 'remoteWorker';
     state: 'harvesting' | 'delivering' | 'mining' | 'hauling' | 'building';
     assignedPos?: { x: number; y: number; roomName: string };
     deliveryTarget?: 'spawn' | 'extension' | 'controller';
     stuckCount: number;
     lastPos?: { x: number; y: number };
     sourceId?: Id<Source>;
+    /** Home room for remote workers */
+    homeRoom?: string;
+    /** Target room for remote workers */
+    targetRoom?: string;
     /** For haulers: which container to pickup from */
     containerId?: Id<StructureContainer>;
     /** For workers in building mode: what structure to build */

@@ -1,4 +1,5 @@
 import { Process, ProcessPriority, ProcessResult } from '../kernel';
+import { findAndAssignMiningPosition, releaseMiningPosition } from '../lib';
 
 /**
  * RCL1Process - Speedrun to RCL 2
@@ -8,8 +9,6 @@ import { Process, ProcessPriority, ProcessResult } from '../kernel';
  * - Workers harvest energy and keep spawn topped up
  * - Once spawn is full, workers upgrade controller
  * - Hands off to RCL2AProcess at RCL 2
- * 
- * Self-contained: No external managers or utilities.
  */
 export class RCL1Process implements Process {
   readonly id: string;
@@ -19,9 +18,9 @@ export class RCL1Process implements Process {
   private readonly roomName: string;
 
   // Constants
-  private static readonly WORKER_BODY: BodyPartConstant[] = [WORK, CARRY, MOVE, MOVE];
-  private static readonly WORKER_COST = 250;
-  private static readonly MAX_WORKERS = 3;
+  private static readonly WORKER_BODY: BodyPartConstant[] = [WORK, WORK, CARRY, MOVE];
+  private static readonly WORKER_COST = 300;
+  private static readonly MAX_WORKERS = 4;
 
   constructor(roomName: string) {
     this.roomName = roomName;
@@ -103,6 +102,8 @@ export class RCL1Process implements Process {
     // State transitions
     if (creep.memory.state === 'harvesting' && creep.store.getFreeCapacity() === 0) {
       creep.memory.state = 'delivering';
+      // Release mining position so others can use it
+      releaseMiningPosition(creep);
     }
     if (creep.memory.state === 'delivering' && creep.store.getUsedCapacity() === 0) {
       creep.memory.state = 'harvesting';
@@ -117,14 +118,44 @@ export class RCL1Process implements Process {
   }
 
   /**
-   * Harvest from nearest source.
+   * Harvest: go to assigned mining position and harvest.
+   * Uses shared lib/miningPositions for position management.
    */
   private doHarvest(creep: Creep): void {
-    const source = creep.pos.findClosestByPath(FIND_SOURCES_ACTIVE);
-    if (!source) return;
+    const room = creep.room;
 
-    if (creep.harvest(source) === ERR_NOT_IN_RANGE) {
-      creep.moveTo(source, { reusePath: 5 });
+    // Assign mining position if not already assigned
+    if (!creep.memory.assignedPos) {
+      const preferredSource = creep.memory.sourceId 
+        ? Game.getObjectById(creep.memory.sourceId) 
+        : null;
+      const assignment = findAndAssignMiningPosition(room, creep.name, preferredSource);
+      if (!assignment) {
+        // No positions available, wait
+        return;
+      }
+      creep.memory.assignedPos = assignment.pos;
+      creep.memory.sourceId = assignment.sourceId;
+    }
+
+    // Move to assigned position
+    const pos = new RoomPosition(
+      creep.memory.assignedPos.x,
+      creep.memory.assignedPos.y,
+      creep.memory.assignedPos.roomName
+    );
+
+    if (!creep.pos.isEqualTo(pos)) {
+      creep.moveTo(pos, { reusePath: 5 });
+      return;
+    }
+
+    // At position - harvest
+    if (creep.memory.sourceId) {
+      const source = Game.getObjectById(creep.memory.sourceId);
+      if (source) {
+        creep.harvest(source);
+      }
     }
   }
 

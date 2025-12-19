@@ -50,21 +50,17 @@ function initializeProcesses(kernel: ReturnType<typeof getKernel>): void {
     
     if (!room.controller?.my) continue;
 
-    // RCL 1: Speedrun to RCL 2
-    if (room.controller.level === 1) {
-      const process = new RCL1Process(roomName);
-      kernel.register(process);
-      console.log(`Registered: ${process.name}`);
-    }
+    // Register ALL RCL processes for owned rooms
+    // Each process's shouldRun() determines if it actually executes
+    const rcl1 = new RCL1Process(roomName);
+    const rcl2a = new RCL2AProcess(roomName);
+    const rcl2b = new RCL2BProcess(roomName);
     
-    // RCL 2: Register both A and B, they self-select via shouldRun()
-    if (room.controller.level === 2) {
-      const processA = new RCL2AProcess(roomName);
-      const processB = new RCL2BProcess(roomName);
-      kernel.register(processA);
-      kernel.register(processB);
-      console.log(`Registered: ${processA.name}, ${processB.name}`);
-    }
+    kernel.register(rcl1);
+    kernel.register(rcl2a);
+    kernel.register(rcl2b);
+    
+    console.log(`Registered processes for ${roomName} (RCL ${room.controller.level})`);
   }
 
   console.log(`Kernel initialized with ${kernel.processCount} processes`);

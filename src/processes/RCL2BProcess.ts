@@ -1,4 +1,5 @@
 import { Process, ProcessPriority, ProcessResult } from '../kernel';
+import { runMiner, runHauler, runFiller, runRemoteWorker } from '../roles';
 
 /**
  * RCL2BProcess - Infrastructure & Upgrade Push
@@ -10,8 +11,6 @@ import { Process, ProcessPriority, ProcessResult } from '../kernel';
  * 3. First Hauler: Once container built, spawn hauler
  * 4. Second Source: Repeat for Source2
  * 5. Upgrade Push: All excess energy to controller
- * 
- * Self-contained: No external managers or utilities.
  */
 export class RCL2BProcess implements Process {
   readonly id: string;
@@ -21,9 +20,9 @@ export class RCL2BProcess implements Process {
   private readonly roomName: string;
 
   // Creep Bodies (RCL 2 - 550 capacity)
-  private static readonly WORKER_BODY: BodyPartConstant[] = [WORK, CARRY, MOVE, MOVE]; // 250
   private static readonly MINER_BODY: BodyPartConstant[] = [WORK, WORK, WORK, WORK, WORK, MOVE]; // 550
   private static readonly HAULER_BODY: BodyPartConstant[] = [CARRY, CARRY, CARRY, CARRY, MOVE, MOVE]; // 300
+  private static readonly WORKER_BODY: BodyPartConstant[] = [WORK, CARRY, MOVE, MOVE]; // 250
 
   private static readonly MINER_COST = 550;
   private static readonly HAULER_COST = 300;
@@ -42,11 +41,11 @@ export class RCL2BProcess implements Process {
     const room = Game.rooms[this.roomName];
     if (!room || !room.controller?.my) return false;
     if (room.controller.level !== 2) return false;
-    
+
     const extensions = room.find(FIND_MY_STRUCTURES, {
       filter: s => s.structureType === STRUCTURE_EXTENSION
     });
-    
+
     return extensions.length >= 5;
   }
 
@@ -55,7 +54,7 @@ export class RCL2BProcess implements Process {
    */
   run(): ProcessResult {
     const room = Game.rooms[this.roomName];
-    
+
     if (!room || !room.controller?.my) {
       return { success: false, message: `Room ${this.roomName} not accessible` };
     }
@@ -65,61 +64,60 @@ export class RCL2BProcess implements Process {
       return { success: false, message: 'No spawn found' };
     }
 
-    // Initialize room memory for container tracking
-    if (!room.memory.sourceContainers) {
-      room.memory.sourceContainers = {};
-    }
-
-    // Get sources
+    // Get sources and build source data
     const sources = room.find(FIND_SOURCES);
-    
-    // Get all creeps by role
     const creeps = room.find(FIND_MY_CREEPS);
     const miners = creeps.filter(c => c.memory.role === 'miner');
     const haulers = creeps.filter(c => c.memory.role === 'hauler');
     const workers = creeps.filter(c => c.memory.role === 'worker');
+    const fillers = creeps.filter(c => c.memory.role === 'filler');
+    const remoteWorkers = Object.values(Game.creeps).filter(
+      c => c.memory.role === 'remoteWorker' && c.memory.homeRoom === this.roomName
+    );
 
-    // Track containers per source
-    const sourceData = sources.map(source => {
-      const container = this.findContainerNearSource(source);
-      const containerSite = this.findContainerSiteNearSource(source);
-      const miner = miners.find(m => m.memory.sourceId === source.id);
-      const hauler = haulers.find(h => h.memory.sourceId === source.id);
-      
-      return {
-        source,
-        container,
-        containerSite,
-        miner,
-        hauler,
-        hasContainer: !!container,
-        hasMiner: !!miner,
-        hasHauler: !!hauler,
-      };
-    });
+    const sourceData = sources.map(source => ({
+      source,
+      container: this.findContainerNearSource(source),
+      containerSite: this.findContainerSiteNearSource(source),
+      miner: miners.find(m => m.memory.sourceId === source.id),
+      hauler: haulers.find(h => h.memory.sourceId === source.id),
+    }));
 
-    // Determine current phase based on infrastructure state
+    // Determine phase and spawn
     const phase = this.determinePhase(sourceData);
-
-    // Run spawning logic based on phase
     this.runSpawning(spawn, phase, sourceData, workers.length);
 
-    // Run all creeps
+    // Run miners
     for (const miner of miners) {
-      this.runMiner(miner);
+      runMiner(miner);
     }
 
+    // Run haulers
+    const haulerCtx = { spawn, controller: room.controller };
     for (const hauler of haulers) {
-      this.runHauler(hauler, spawn, room);
+      runHauler(hauler, haulerCtx);
     }
 
+    // Run workers (container builders)
     for (const worker of workers) {
       this.runWorker(worker, spawn, room.controller, sourceData);
     }
 
+    // Run fillers (from RCL2A)
+    const fillerCtx = { spawn, controller: room.controller };
+    for (const filler of fillers) {
+      runFiller(filler, fillerCtx);
+    }
+
+    // Run remote workers (from RCL2A)
+    const remoteCtx = { homeSpawn: spawn, controller: room.controller, extensionSites: [], needsUpgrade: false };
+    for (const remote of remoteWorkers) {
+      runRemoteWorker(remote, remoteCtx);
+    }
+
     return {
       success: true,
-      message: `Phase ${phase}: ${miners.length}M/${haulers.length}H/${workers.length}W`,
+      message: `Phase ${phase}: ${miners.length}M/${haulers.length}H/${workers.length}W/${fillers.length}F/${remoteWorkers.length}R`,
     };
   }
 
@@ -127,25 +125,25 @@ export class RCL2BProcess implements Process {
    * Determine current phase based on infrastructure state.
    */
   private determinePhase(sourceData: Array<{
-    hasContainer: boolean;
-    hasMiner: boolean;
-    hasHauler: boolean;
+    container: StructureContainer | null;
+    miner: Creep | undefined;
+    hauler: Creep | undefined;
   }>): number {
     const s1 = sourceData[0];
     const s2 = sourceData[1];
 
     // Phase 5: Both sources have miner + container + hauler
-    if (s1?.hasContainer && s1?.hasHauler && s2?.hasContainer && s2?.hasHauler) {
+    if (s1?.container && s1?.hauler && s2?.container && s2?.hauler) {
       return 5;
     }
 
     // Phase 4: First source complete, working on second
-    if (s1?.hasContainer && s1?.hasHauler) {
+    if (s1?.container && s1?.hauler) {
       return 4;
     }
 
     // Phase 3: First miner exists and container built, need hauler
-    if (s1?.hasMiner && s1?.hasContainer) {
+    if (s1?.miner && s1?.container) {
       return 3;
     }
 
@@ -161,9 +159,9 @@ export class RCL2BProcess implements Process {
     phase: number,
     sourceData: Array<{
       source: Source;
-      hasMiner: boolean;
-      hasContainer: boolean;
-      hasHauler: boolean;
+      miner: Creep | undefined;
+      container: StructureContainer | null;
+      hauler: Creep | undefined;
     }>,
     workerCount: number
   ): void {
@@ -174,30 +172,30 @@ export class RCL2BProcess implements Process {
     const s2 = sourceData[1];
 
     // Phase 2: Spawn first miner
-    if (phase === 2 && !s1?.hasMiner && energyAvailable >= RCL2BProcess.MINER_COST) {
+    if (phase === 2 && !s1?.miner && energyAvailable >= RCL2BProcess.MINER_COST) {
       this.spawnMiner(spawn, s1.source);
       return;
     }
 
     // Phase 3: Spawn first hauler
-    if (phase === 3 && !s1?.hasHauler && energyAvailable >= RCL2BProcess.HAULER_COST) {
+    if (phase === 3 && !s1?.hauler && energyAvailable >= RCL2BProcess.HAULER_COST) {
       this.spawnHauler(spawn, s1.source);
       return;
     }
 
     // Phase 4: Spawn second miner
-    if (phase === 4 && s2 && !s2.hasMiner && energyAvailable >= RCL2BProcess.MINER_COST) {
+    if (phase === 4 && s2 && !s2.miner && energyAvailable >= RCL2BProcess.MINER_COST) {
       this.spawnMiner(spawn, s2.source);
       return;
     }
 
     // Phase 4: Spawn second hauler (after container)
-    if (phase === 4 && s2 && s2.hasContainer && !s2.hasHauler && energyAvailable >= RCL2BProcess.HAULER_COST) {
+    if (phase === 4 && s2 && s2.container && !s2.hauler && energyAvailable >= RCL2BProcess.HAULER_COST) {
       this.spawnHauler(spawn, s2.source);
       return;
     }
 
-    // Keep at least 1 worker for building containers and emergencies
+    // Keep at least 1 worker for building containers
     if (workerCount < 1 && energyAvailable >= RCL2BProcess.WORKER_COST) {
       const name = `W${Game.time % 1000}`;
       spawn.spawnCreep(RCL2BProcess.WORKER_BODY, name, {
@@ -212,7 +210,7 @@ export class RCL2BProcess implements Process {
   private spawnMiner(spawn: StructureSpawn, source: Source): void {
     const name = `M${Game.time % 1000}`;
     const pos = this.findMiningPosition(source);
-    
+
     const result = spawn.spawnCreep(RCL2BProcess.MINER_BODY, name, {
       memory: {
         role: 'miner',
@@ -233,7 +231,7 @@ export class RCL2BProcess implements Process {
    */
   private spawnHauler(spawn: StructureSpawn, source: Source): void {
     const name = `H${Game.time % 1000}`;
-    
+
     const result = spawn.spawnCreep(RCL2BProcess.HAULER_BODY, name, {
       memory: {
         role: 'hauler',
@@ -253,7 +251,7 @@ export class RCL2BProcess implements Process {
    */
   private findMiningPosition(source: Source): RoomPosition | null {
     const terrain = source.room.getTerrain();
-    
+
     for (let dx = -1; dx <= 1; dx++) {
       for (let dy = -1; dy <= 1; dy++) {
         if (dx === 0 && dy === 0) continue;
@@ -288,123 +286,7 @@ export class RCL2BProcess implements Process {
   }
 
   /**
-   * Run miner logic: go to position, drop mine.
-   */
-  private runMiner(creep: Creep): void {
-    if (!creep.memory.sourceId) return;
-
-    const source = Game.getObjectById(creep.memory.sourceId);
-    if (!source) return;
-
-    // Move to assigned position
-    if (creep.memory.assignedPos) {
-      const pos = new RoomPosition(
-        creep.memory.assignedPos.x,
-        creep.memory.assignedPos.y,
-        creep.memory.assignedPos.roomName
-      );
-
-      if (!creep.pos.isEqualTo(pos)) {
-        creep.moveTo(pos, { reusePath: 10 });
-        return;
-      }
-    }
-
-    // At position - harvest (drop mining)
-    creep.harvest(source);
-  }
-
-  /**
-   * Run hauler logic: pickup from container/ground → deliver to spawn/extensions.
-   */
-  private runHauler(creep: Creep, spawn: StructureSpawn, room: Room): void {
-    // State transitions
-    if (creep.store.getFreeCapacity() === 0) {
-      creep.memory.state = 'delivering';
-    }
-    if (creep.store.getUsedCapacity() === 0) {
-      creep.memory.state = 'hauling';
-    }
-
-    if (creep.memory.state === 'hauling') {
-      this.doHaulerPickup(creep);
-    } else {
-      this.doHaulerDeliver(creep, spawn, room);
-    }
-  }
-
-  /**
-   * Hauler pickup from container or ground near source.
-   */
-  private doHaulerPickup(creep: Creep): void {
-    if (!creep.memory.sourceId) return;
-
-    const source = Game.getObjectById(creep.memory.sourceId);
-    if (!source) return;
-
-    // Try container first
-    const container = this.findContainerNearSource(source);
-    if (container && container.store.getUsedCapacity(RESOURCE_ENERGY) > 0) {
-      if (creep.withdraw(container, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
-        creep.moveTo(container, { reusePath: 5 });
-      }
-      return;
-    }
-
-    // Fallback: pickup from ground
-    const dropped = source.pos.findInRange(FIND_DROPPED_RESOURCES, 1, {
-      filter: r => r.resourceType === RESOURCE_ENERGY
-    })[0];
-    
-    if (dropped) {
-      if (creep.pickup(dropped) === ERR_NOT_IN_RANGE) {
-        creep.moveTo(dropped, { reusePath: 5 });
-      }
-      return;
-    }
-
-    // Nothing to pickup - move near source to wait
-    if (!creep.pos.inRangeTo(source, 2)) {
-      creep.moveTo(source, { reusePath: 5, range: 2 });
-    }
-  }
-
-  /**
-   * Hauler deliver to spawn/extensions.
-   */
-  private doHaulerDeliver(creep: Creep, spawn: StructureSpawn, room: Room): void {
-    // Priority 1: Fill spawn
-    if (spawn.store.getFreeCapacity(RESOURCE_ENERGY) > 0) {
-      if (creep.transfer(spawn, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
-        creep.moveTo(spawn, { reusePath: 5 });
-      }
-      return;
-    }
-
-    // Priority 2: Fill extensions
-    const extension = creep.pos.findClosestByPath(FIND_MY_STRUCTURES, {
-      filter: (s): s is StructureExtension =>
-        s.structureType === STRUCTURE_EXTENSION &&
-        s.store.getFreeCapacity(RESOURCE_ENERGY) > 0
-    });
-    
-    if (extension) {
-      if (creep.transfer(extension, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
-        creep.moveTo(extension, { reusePath: 5 });
-      }
-      return;
-    }
-
-    // Priority 3: Upgrade controller
-    if (room.controller) {
-      if (creep.upgradeController(room.controller) === ERR_NOT_IN_RANGE) {
-        creep.moveTo(room.controller, { reusePath: 5, range: 3 });
-      }
-    }
-  }
-
-  /**
-   * Run worker logic: build containers, upgrade controller, emergency refill.
+   * Run worker logic: build containers, upgrade controller.
    */
   private runWorker(
     creep: Creep,
@@ -412,7 +294,7 @@ export class RCL2BProcess implements Process {
     controller: StructureController,
     sourceData: Array<{
       source: Source;
-      miner?: Creep;
+      miner: Creep | undefined;
       container: StructureContainer | null;
       containerSite: ConstructionSite | null;
     }>
@@ -437,7 +319,7 @@ export class RCL2BProcess implements Process {
    */
   private doWorkerHarvest(
     creep: Creep,
-    sourceData: Array<{ source: Source; miner?: Creep }>
+    sourceData: Array<{ source: Source; miner: Creep | undefined }>
   ): void {
     // Try to pickup dropped energy from miners first
     for (const data of sourceData) {
@@ -445,7 +327,7 @@ export class RCL2BProcess implements Process {
         const dropped = data.miner.pos.findInRange(FIND_DROPPED_RESOURCES, 1, {
           filter: r => r.resourceType === RESOURCE_ENERGY
         })[0];
-        
+
         if (dropped) {
           if (creep.pickup(dropped) === ERR_NOT_IN_RANGE) {
             creep.moveTo(dropped, { reusePath: 5 });
@@ -473,7 +355,7 @@ export class RCL2BProcess implements Process {
     controller: StructureController,
     sourceData: Array<{
       source: Source;
-      miner?: Creep;
+      miner: Creep | undefined;
       container: StructureContainer | null;
       containerSite: ConstructionSite | null;
     }>

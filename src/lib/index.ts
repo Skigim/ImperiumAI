@@ -7,3 +7,4 @@
 export * from './bodyBuilder';
 export * from './miningPositions';
 export * from './harvest';
+export * from './roomPlanner';

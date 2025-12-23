@@ -18,6 +18,8 @@ declare global {
   }
 
   interface RoomMemory {
+    /** Anchor point for static blueprints (manually set for now) */
+    anchor?: { x: number; y: number };
     assignedPositions?: { [posKey: string]: string }; // posKey -> creepName
     /** Static data - mining positions per source (persists, terrain-based) */
     miningPositions?: { [sourceId: string]: { x: number; y: number }[] };

@@ -17,13 +17,15 @@ function createMockProcess(
   options: {
     priority?: ProcessPriority;
     shouldRun?: () => boolean;
+    shouldTerminate?: () => boolean;
     runResult?: ProcessResult;
     runImpl?: () => ProcessResult;
   } = {}
 ): Process {
   const {
     priority = ProcessPriority.NORMAL,
-    shouldRun,
+    shouldRun = () => true,
+    shouldTerminate,
     runResult = { success: true },
     runImpl,
   } = options;
@@ -32,11 +34,12 @@ function createMockProcess(
     id,
     name: `Test Process ${id}`,
     priority,
+    shouldRun,
     run: runImpl ?? jest.fn(() => runResult),
   };
 
-  if (shouldRun !== undefined) {
-    process.shouldRun = shouldRun;
+  if (shouldTerminate !== undefined) {
+    process.shouldTerminate = shouldTerminate;
   }
 
   return process;

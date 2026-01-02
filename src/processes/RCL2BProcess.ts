@@ -1,5 +1,6 @@
-import { Process, ProcessPriority, ProcessResult } from '../kernel';
+import { ProcessPriority, ProcessResult } from '../kernel';
 import { runMiner, runHauler, runFiller, runRemoteWorker } from '../roles';
+import { RoomStageProcess } from './RoomStageProcess';
 
 /**
  * RCL2BProcess - Infrastructure & Upgrade Push
@@ -12,12 +13,8 @@ import { runMiner, runHauler, runFiller, runRemoteWorker } from '../roles';
  * 4. Second Source: Repeat for Source2
  * 5. Upgrade Push: All excess energy to controller
  */
-export class RCL2BProcess implements Process {
-  readonly id: string;
-  readonly name: string;
+export class RCL2BProcess extends RoomStageProcess {
   readonly priority = ProcessPriority.NORMAL;
-
-  private readonly roomName: string;
 
   // Creep Bodies (RCL 2 - 550 capacity)
   private static readonly MINER_BODY: BodyPartConstant[] = [WORK, WORK, WORK, WORK, WORK, MOVE]; // 550
@@ -29,17 +26,15 @@ export class RCL2BProcess implements Process {
   private static readonly WORKER_COST = 250;
 
   constructor(roomName: string) {
-    this.roomName = roomName;
-    this.id = `rcl2b-${roomName}`;
-    this.name = `RCL2B(${roomName})`;
+    super(roomName, 'rcl2b', 'RCL2B');
   }
 
   /**
    * Run if RCL 2 and all 5 extensions are built.
    */
   shouldRun(): boolean {
-    const room = Game.rooms[this.roomName];
-    if (!room || !room.controller?.my) return false;
+    const room = this.room;
+    if (!room?.controller?.my) return false;
     if (room.controller.level !== 2) return false;
 
     const extensions = room.find(FIND_MY_STRUCTURES, {
@@ -53,7 +48,7 @@ export class RCL2BProcess implements Process {
    * Main process loop.
    */
   run(): ProcessResult {
-    const room = Game.rooms[this.roomName];
+    const room = this.room;
 
     if (!room || !room.controller?.my) {
       return { success: false, message: `Room ${this.roomName} not accessible` };

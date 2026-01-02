@@ -1,6 +1,7 @@
-import { Process, ProcessPriority, ProcessResult } from '../kernel';
+import { ProcessPriority, ProcessResult } from '../kernel';
 import { buildRemoteWorkerBody, buildFillerBody, buildLocalWorkerBody, getBodyCost, countMiningPositions } from '../lib';
 import { runWorker, runFiller, runRemoteWorker } from '../roles';
+import { RoomStageProcess } from './RoomStageProcess';
 
 /**
  * RCL2AProcess - Extension Rush with Remote Mining
@@ -15,29 +16,23 @@ import { runWorker, runFiller, runRemoteWorker } from '../roles';
  * Upgrade controller only if at risk of downgrade (< 1000 ticks)
  * Hands off to RCL2BProcess once all 5 extensions are built
  */
-export class RCL2AProcess implements Process {
-  readonly id: string;
-  readonly name: string;
+export class RCL2AProcess extends RoomStageProcess {
   readonly priority = ProcessPriority.CRITICAL;
-
-  private readonly roomName: string;
 
   // Constants
   private static readonly MAX_EXTENSIONS = 5;
   private static readonly DOWNGRADE_THRESHOLD = 1000;
 
   constructor(roomName: string) {
-    this.roomName = roomName;
-    this.id = `rcl2a-${roomName}`;
-    this.name = `RCL2A(${roomName})`;
+    super(roomName, 'rcl2a', 'RCL2A');
   }
 
   /**
    * Run if RCL 2 and extensions not yet complete.
    */
   shouldRun(): boolean {
-    const room = Game.rooms[this.roomName];
-    if (!room || !room.controller?.my) return false;
+    const room = this.room;
+    if (!room?.controller?.my) return false;
     if (room.controller.level !== 2) return false;
     
     const extensions = room.find(FIND_MY_STRUCTURES, {
@@ -51,7 +46,7 @@ export class RCL2AProcess implements Process {
    * Main process loop.
    */
   run(): ProcessResult {
-    const room = Game.rooms[this.roomName];
+    const room = this.room;
     
     if (!room || !room.controller?.my) {
       return { success: false, message: `Room ${this.roomName} not accessible` };

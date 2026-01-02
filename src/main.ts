@@ -1,6 +1,6 @@
 import './types';
 import { getKernel, isKernelInitialized } from './kernel';
-import { RCL1Process, RCL2AProcess, RCL2BProcess } from './processes';
+import { RoomManagerProcess } from './processes';
 
 /**
  * Main game loop - called every tick by Screeps engine.
@@ -50,15 +50,11 @@ function initializeProcesses(kernel: ReturnType<typeof getKernel>): void {
     
     if (!room.controller?.my) continue;
 
-    // Register ALL RCL processes for owned rooms
-    // Each process's shouldRun() determines if it actually executes
-    const rcl1 = new RCL1Process(roomName);
-    const rcl2a = new RCL2AProcess(roomName);
-    const rcl2b = new RCL2BProcess(roomName);
-    
-    kernel.register(rcl1);
-    kernel.register(rcl2a);
-    kernel.register(rcl2b);
+    // Register ONE supervisor per room.
+    // The supervisor selects and (un)registers the correct stage process.
+    const manager = new RoomManagerProcess(kernel, roomName);
+    kernel.register(manager);
+    manager.syncStage();
     
     console.log(`Registered processes for ${roomName} (RCL ${room.controller.level})`);
   }

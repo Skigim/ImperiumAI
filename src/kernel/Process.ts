@@ -13,17 +13,22 @@ export interface Process {
   readonly priority: ProcessPriority;
 
   /**
+   * Check if process should be active this tick.
+   * Used for stage-based processes (e.g., RCL1 vs RCL2) and cheap gating.
+   */
+  shouldRun(): boolean;
+
+  /**
+   * Optional: Check if process should be permanently removed.
+   * Useful when a process is tied to a room that is no longer owned/visible.
+   */
+  shouldTerminate?(): boolean;
+
+  /**
    * Execute one tick of process logic.
    * @returns ProcessResult indicating completion status
    */
   run(): ProcessResult;
-
-  /**
-   * Optional: Check if process should be active this tick.
-   * Allows processes to skip execution when not needed.
-   * @returns true if process should run, false to skip
-   */
-  shouldRun?(): boolean;
 }
 
 /**

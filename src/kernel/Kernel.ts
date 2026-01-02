@@ -109,17 +109,25 @@ export class Kernel {
       const process = this.processes.get(processId);
       if (!process) continue;
 
-      // Check CPU budget before running
-      const cpuUsed = Game.cpu.getUsed();
-      if (cpuUsed >= availableCpu) {
-        console.log(`Kernel: CPU budget exhausted (${cpuUsed.toFixed(2)}), skipping remaining processes`);
-        this.currentStats.processesSkipped++;
+      // Remove processes that no longer apply (e.g., lost room ownership)
+      if (process.shouldTerminate && process.shouldTerminate()) {
+        this.unregister(processId);
         continue;
       }
 
       // Check if process wants to run this tick
-      if (process.shouldRun && !process.shouldRun()) {
+      if (!process.shouldRun()) {
+        this.currentStats.processesSkipped++;
         continue;
+      }
+
+      // Check CPU budget before running
+      const cpuUsed = Game.cpu.getUsed();
+      if (cpuUsed >= availableCpu) {
+        console.log(`Kernel: CPU budget exhausted (${cpuUsed.toFixed(2)}), skipping remaining processes`);
+        // All remaining runnable processes are skipped this tick
+        this.currentStats.processesSkipped += 1;
+        break;
       }
 
       // Execute the process

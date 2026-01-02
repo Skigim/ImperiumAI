@@ -1,5 +1,6 @@
-import { Process, ProcessPriority, ProcessResult } from '../kernel';
+import { ProcessPriority, ProcessResult } from '../kernel';
 import { findAndAssignMiningPosition, releaseMiningPosition } from '../lib';
+import { RoomStageProcess } from './RoomStageProcess';
 
 /**
  * RCL1Process - Speedrun to RCL 2
@@ -10,12 +11,8 @@ import { findAndAssignMiningPosition, releaseMiningPosition } from '../lib';
  * - Once spawn is full, workers upgrade controller
  * - Hands off to RCL2AProcess at RCL 2
  */
-export class RCL1Process implements Process {
-  readonly id: string;
-  readonly name: string;
+export class RCL1Process extends RoomStageProcess {
   readonly priority = ProcessPriority.CRITICAL;
-
-  private readonly roomName: string;
 
   // Constants
   private static readonly WORKER_BODY: BodyPartConstant[] = [WORK, WORK, CARRY, MOVE];
@@ -23,19 +20,15 @@ export class RCL1Process implements Process {
   private static readonly MAX_WORKERS = 4;
 
   constructor(roomName: string) {
-    this.roomName = roomName;
-    this.id = `rcl1-${roomName}`;
-    this.name = `RCL1(${roomName})`;
+    super(roomName, 'rcl1', 'RCL1');
   }
 
   /**
    * Only run if room exists and is RCL 1.
    */
   shouldRun(): boolean {
-    const room = Game.rooms[this.roomName];
-    if (!room || !room.controller?.my) {
-      return false;
-    }
+    const room = this.room;
+    if (!room?.controller?.my) return false;
     return room.controller.level === 1;
   }
 
@@ -43,7 +36,7 @@ export class RCL1Process implements Process {
    * Main process loop.
    */
   run(): ProcessResult {
-    const room = Game.rooms[this.roomName];
+    const room = this.room;
     
     if (!room || !room.controller?.my) {
       return { success: false, message: `Room ${this.roomName} not accessible` };

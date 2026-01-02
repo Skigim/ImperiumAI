@@ -6,3 +6,7 @@ export { RCL2AProcess } from './RCL2AProcess';
 
 // RCL 2B - Miner/Hauler Infrastructure
 export { RCL2BProcess } from './RCL2BProcess';
+
+// Base + Supervisor
+export { RoomStageProcess } from './RoomStageProcess';
+export { RoomManagerProcess } from './RoomManagerProcess';

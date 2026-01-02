@@ -31,6 +31,9 @@ declare global {
     rcl2Phase?: 1 | 2 | 3 | 4 | 5;
     /** Container IDs for each source */
     sourceContainers?: { [sourceId: string]: Id<StructureContainer> };
+
+    /** Room stage selected by the supervisor process */
+    stage?: 'rcl1' | 'rcl2a' | 'rcl2b';
   }
 
   interface CreepMemory {

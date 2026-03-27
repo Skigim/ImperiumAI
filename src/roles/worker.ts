@@ -1,4 +1,4 @@
-import { moveTo } from '../lib/trafficManager';
+import { moveTo } from "../lib/trafficManager";
 
 /**
  * Role Behavior: Worker
@@ -21,10 +21,86 @@ declare global {
     transferTargetId?: Id<StructureExtension | StructureSpawn>;
     // Mechanical property for traffic management
     _lastPos?: {
-        x: number;
-        y: number;
-        roomName: string;
+      x: number;
+      y: number;
+      roomName: string;
     };
+  }
+}
+
+/**
+ * Update worker state based on energy levels.
+ */
+function updateWorkerState(creep: Creep): void {
+  // Switch to delivery when full
+  if (creep.memory.harvesting && creep.store.getFreeCapacity() === 0) {
+    creep.memory.harvesting = false;
+    delete creep.memory.transferTargetId;
+    creep.say("🚚 Deliver");
+  }
+
+  // Switch to harvesting when empty
+  if (!creep.memory.harvesting && creep.store[RESOURCE_ENERGY] === 0) {
+    creep.memory.harvesting = true;
+    creep.say("🔄 Harvest");
+  }
+}
+
+/**
+ * Execute harvesting behavior.
+ */
+function executeHarvesting(creep: Creep): void {
+  const source = creep.pos.findClosestByRange(FIND_SOURCES_ACTIVE);
+  if (source && creep.harvest(source) === ERR_NOT_IN_RANGE) {
+    moveTo(creep, source.pos);
+  }
+}
+
+/**
+ * Find or retrieve a valid delivery target.
+ */
+function findDeliveryTarget(
+  creep: Creep,
+): StructureExtension | StructureSpawn | null {
+  // Check cached target
+  if (creep.memory.transferTargetId) {
+    const target = Game.getObjectById(creep.memory.transferTargetId);
+    if (target && target.store.getFreeCapacity(RESOURCE_ENERGY) > 0) {
+      return target;
+    }
+    delete creep.memory.transferTargetId;
+  }
+
+  // Find new target
+  const target = creep.pos.findClosestByRange(FIND_MY_STRUCTURES, {
+    filter: (
+      s,
+    ): s is StructureExtension | StructureSpawn =>
+      (s.structureType === STRUCTURE_EXTENSION ||
+        s.structureType === STRUCTURE_SPAWN) &&
+      s.store.getFreeCapacity(RESOURCE_ENERGY) > 0,
+  });
+
+  if (target) {
+    creep.memory.transferTargetId = target.id;
+  }
+  return target;
+}
+
+/**
+ * Execute delivering behavior.
+ */
+function executeDelivering(creep: Creep, ctx: WorkerContext): void {
+  const target = findDeliveryTarget(creep);
+
+  if (target) {
+    if (creep.transfer(target, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
+      moveTo(creep, target.pos);
+    }
+  } else if (ctx.controller) {
+    if (creep.upgradeController(ctx.controller) === ERR_NOT_IN_RANGE) {
+      moveTo(creep, ctx.controller.pos);
+    }
   }
 }
 
@@ -32,69 +108,11 @@ declare global {
  * Run worker behavior for one tick.
  */
 export function runWorker(creep: Creep, ctx: WorkerContext): void {
-  
-  // 1. STATE UPDATES
-  // Switch to delivery when full
-  if (creep.memory.harvesting && creep.store.getFreeCapacity() === 0) {
-    creep.memory.harvesting = false;
-    delete creep.memory.transferTargetId; // Clear target to find a fresh one
-    creep.say('🚚 Deliver');
-  }
-  
-  // Switch to harvesting when empty
-  if (!creep.memory.harvesting && creep.store[RESOURCE_ENERGY] === 0) {
-    creep.memory.harvesting = true;
-    creep.say('🔄 Harvest');
-  }
+  updateWorkerState(creep);
 
-  // 2. STATE EXECUTION
   if (creep.memory.harvesting) {
-    // --- HARVESTING ---
-    const source = creep.pos.findClosestByRange(FIND_SOURCES_ACTIVE);
-    if (source) {
-      if (creep.harvest(source) === ERR_NOT_IN_RANGE) {
-        // Use your library instead of native creep.moveTo
-        moveTo(creep, source.pos);
-      }
-    }
+    executeHarvesting(creep);
   } else {
-    // --- DELIVERING ---
-    let target: StructureExtension | StructureSpawn | null = null;
-
-    // A. Check cached target
-    if (creep.memory.transferTargetId) {
-      target = Game.getObjectById(creep.memory.transferTargetId);
-      if (!target || target.store.getFreeCapacity(RESOURCE_ENERGY) === 0) {
-        target = null;
-        delete creep.memory.transferTargetId;
-      }
-    }
-
-    // B. If no cache, find a new target
-    if (!target) {
-      target = creep.pos.findClosestByRange(FIND_MY_STRUCTURES, {
-        filter: (s) => (s.structureType === STRUCTURE_EXTENSION || 
-                        s.structureType === STRUCTURE_SPAWN) &&
-                       s.store.getFreeCapacity(RESOURCE_ENERGY) > 0
-      }) as StructureExtension | StructureSpawn | null;
-
-      if (target) {
-        creep.memory.transferTargetId = target.id;
-      }
-    }
-
-    // C. Action
-    if (target) {
-      if (creep.transfer(target, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
-        moveTo(creep, target.pos);
-      }
-    } else {
-      // FALLBACK: Use context-provided controller if no delivery targets found
-      if (ctx.controller) {
-        if (creep.upgradeController(ctx.controller) === ERR_NOT_IN_RANGE) {
-          moveTo(creep, ctx.controller.pos);
-        }
-      }
-    }
+    executeDelivering(creep, ctx);
   }
 }

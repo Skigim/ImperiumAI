@@ -18,7 +18,7 @@ export function runTransfer(creep: Creep) {
                    s.store.getFreeCapacity(RESOURCE_ENERGY) > 0;
         }
     });
-
+    // visualize the path to the target
     if (target) {
         if (creep.transfer(target, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
             creep.moveTo(target, { visualizePathStyle: { stroke: '#ffffff' } });

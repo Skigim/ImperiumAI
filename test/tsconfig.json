@@ -1,6 +1,9 @@
+// Test-only overrides so Jest can type-check both src/ and test/ with Jest globals.
 {
   "extends": "../tsconfig.json",
   "compilerOptions": {
+    "ignoreDeprecations": "6.0",
+    "moduleResolution": "bundler",
     "rootDir": "..",
     "types": ["jest", "screeps"],
     "noEmit": true

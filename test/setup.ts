@@ -106,7 +106,7 @@ function resetGameMocks(): void {
 }
 
 // Make reset function available globally
-(global as any).resetGameMocks = resetGameMocks;
+(globalThis as any).resetGameMocks = resetGameMocks;
 
 // Run reset before each test by default
 beforeEach(() => {
@@ -120,7 +120,7 @@ export function createConsoleSpy(): { logs: string[]; clear: () => void } {
   
   beforeEach(() => {
     console.log = jest.fn((...args: unknown[]) => {
-      logs.push(args.map(a => String(a)).join(' '));
+      logs.push(args.map(String).join(' '));
     });
   });
 

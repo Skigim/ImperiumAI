@@ -12,5 +12,3 @@ declare global {
     log(...args: unknown[]): void;
   };
 }
-
-export {};

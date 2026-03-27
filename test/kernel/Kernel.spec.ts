@@ -5,7 +5,7 @@
  * scheduling and CPU budget allocation.
  */
 
-import { Kernel, getKernel, isKernelInitialized } from '../../src/kernel/Kernel';
+import { Kernel } from '../../src/kernel/Kernel';
 import { Process, ProcessPriority, ProcessResult } from '../../src/kernel/Process';
 import { mockGlobal } from 'screeps-jest';
 

@@ -1,7 +1,7 @@
 // This file extends the standard Screeps interfaces for Memory.
 // By declaring global, these properties become available on the standard Memory objects.
 
-import { CreepState } from './types';
+import type { CreepState } from './types';
 
 declare global {
   // Lightweight coordinate structure for memory storage
@@ -37,4 +37,4 @@ declare global {
   }
 }
 
-export { CreepState };
+export { CreepState } from './types';

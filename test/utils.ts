@@ -164,6 +164,9 @@ export function mockCreep(
     role: undefined,
     assignedPos: undefined,
     assignedSource: undefined,
+    harvesting: undefined,
+    transferTargetId: undefined,
+    _lastPos: undefined,
     ...memory,
   } as CreepMemory;
 
@@ -323,7 +326,7 @@ export function registerWithGame(objects: {
       // Search all object collections
       for (const collection of [creeps, spawns, structures]) {
         for (const obj of Object.values(collection)) {
-          if ((obj as any).id === id) return obj;
+          if (obj.id === id) return obj;
         }
       }
       return null;

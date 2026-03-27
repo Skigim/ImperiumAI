@@ -1,7 +1,9 @@
+import { moveTo } from '../lib/trafficManager';
+
 /**
  * Role Behavior: Worker
  * * Generic worker that harvests and delivers energy.
- * Uses cached paths and targets for CPU efficiency.
+ * Offloads movement logic to the trafficManager utility.
  */
 
 export interface WorkerContext {
@@ -12,17 +14,16 @@ export interface WorkerContext {
   isFullyStaffed: boolean;
 }
 
-// Extend the CreepMemory to support our logic
 declare global {
   interface CreepMemory {
     role: string;
     harvesting: boolean;
     transferTargetId?: Id<StructureExtension | StructureSpawn>;
-    // The underscore marks this as a "mechanical" helper variable
+    // Mechanical property for traffic management
     _lastPos?: {
-      x: number;
-      y: number;
-      roomName: string;
+        x: number;
+        y: number;
+        roomName: string;
     };
   }
 }
@@ -31,81 +32,67 @@ declare global {
  * Run worker behavior for one tick.
  */
 export function runWorker(creep: Creep, ctx: WorkerContext): void {
-  // 1. STATE MANAGEMENT
-  // Switch to delivery when backpack is full
+  
+  // 1. STATE UPDATES
+  // Switch to delivery when full
   if (creep.memory.harvesting && creep.store.getFreeCapacity() === 0) {
     creep.memory.harvesting = false;
-    delete creep.memory.transferTargetId; // Reset target to find the best delivery point
-    creep.say("🚚 Deliver");
+    delete creep.memory.transferTargetId; // Clear target to find a fresh one
+    creep.say('🚚 Deliver');
   }
-
+  
   // Switch to harvesting when empty
   if (!creep.memory.harvesting && creep.store[RESOURCE_ENERGY] === 0) {
     creep.memory.harvesting = true;
-    creep.say("🔄 Harvest");
+    creep.say('🔄 Harvest');
   }
 
-  // 2. EXECUTE STATE
+  // 2. STATE EXECUTION
   if (creep.memory.harvesting) {
     // --- HARVESTING ---
     const source = creep.pos.findClosestByRange(FIND_SOURCES_ACTIVE);
     if (source) {
       if (creep.harvest(source) === ERR_NOT_IN_RANGE) {
-        creep.moveTo(source, {
-          reusePath: 20,
-          visualizePathStyle: { stroke: "#ffaa00" },
-        });
+        // Use your library instead of native creep.moveTo
+        moveTo(creep, source.pos);
       }
     }
   } else {
     // --- DELIVERING ---
     let target: StructureExtension | StructureSpawn | null = null;
 
-    // A. Check for a valid cached target
+    // A. Check cached target
     if (creep.memory.transferTargetId) {
       target = Game.getObjectById(creep.memory.transferTargetId);
-
-      // Clear cache if the structure is full or gone
       if (!target || target.store.getFreeCapacity(RESOURCE_ENERGY) === 0) {
         target = null;
         delete creep.memory.transferTargetId;
       }
     }
 
-    // B. If no cached target, find the closest priority structure (Extension/Spawn)
+    // B. If no cache, find a new target
     if (!target) {
-      const newTarget = creep.pos.findClosestByRange(FIND_MY_STRUCTURES, {
-        filter: (s) => {
-          return (
-            (s.structureType === STRUCTURE_EXTENSION ||
-              s.structureType === STRUCTURE_SPAWN) &&
-            s.store.getFreeCapacity(RESOURCE_ENERGY) > 0
-          );
-        },
+      target = creep.pos.findClosestByRange(FIND_MY_STRUCTURES, {
+        filter: (s) => (s.structureType === STRUCTURE_EXTENSION || 
+                        s.structureType === STRUCTURE_SPAWN) &&
+                       s.store.getFreeCapacity(RESOURCE_ENERGY) > 0
       }) as StructureExtension | StructureSpawn | null;
 
-      if (newTarget) {
-        target = newTarget;
-        creep.memory.transferTargetId = newTarget.id;
+      if (target) {
+        creep.memory.transferTargetId = target.id;
       }
     }
 
-    // C. Perform the action
+    // C. Action
     if (target) {
       if (creep.transfer(target, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
-        creep.moveTo(target, {
-          reusePath: 20,
-          visualizePathStyle: { stroke: "#ffffff" },
-        });
+        moveTo(creep, target.pos);
       }
     } else {
-      // FALLBACK: Use the provided context to find the controller if the base is full
+      // FALLBACK: Use context-provided controller if no delivery targets found
       if (ctx.controller) {
         if (creep.upgradeController(ctx.controller) === ERR_NOT_IN_RANGE) {
-          creep.moveTo(ctx.controller, {
-            reusePath: 20,
-            visualizePathStyle: { stroke: "#0000ff" },
-          });
+          moveTo(creep, ctx.controller.pos);
         }
       }
     }

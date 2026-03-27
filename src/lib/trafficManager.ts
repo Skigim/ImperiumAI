@@ -1,22 +1,27 @@
-export function smartMove(
-  creep: Creep,
-  target: RoomPosition | _HasRoomPosition,
-): void {
-  // 1. Stuck Detection: Check if we are in the same spot as last tick
-  const isStuck =
-    creep.memory._lastPos &&
-    creep.pos.isEqualTo(creep.memory._lastPos.x, creep.memory._lastPos.y);
+/**
+ * Traffic Manager Utility
+ * Handles movement with stuck detection and path caching.
+ */
+export function moveTo(creep: Creep, targetPos: RoomPosition): void {
+    // 1. Check if we are stuck
+    const isStuck = creep.memory._lastPos && 
+                    creep.pos.x === creep.memory._lastPos.x && 
+                    creep.pos.y === creep.memory._lastPos.y &&
+                    creep.pos.roomName === creep.memory._lastPos.roomName;
 
-  // 2. Execute Move
-  creep.moveTo(target, {
-    reusePath: isStuck ? 0 : 20, // If stuck, pathfind immediately. Else, use cache.
-    visualizePathStyle: { stroke: isStuck ? "#ff0000" : "#ffffff" },
-  });
+    // 2. Move based on stuck status
+    const result = creep.moveTo(targetPos, {
+        reusePath: isStuck ? 0 : 20, // Re-path immediately if stuck
+        visualizePathStyle: { 
+            stroke: isStuck ? '#ff0000' : '#ffffff',
+            opacity: 0.5 
+        }
+    });
 
-  // 3. Save current position for next tick's comparison
-  creep.memory._lastPos = {
-    x: creep.pos.x,
-    y: creep.pos.y,
-    roomName: creep.pos.roomName,
-  };
+    // 3. Update the "internal" position tracker for next tick
+    creep.memory._lastPos = {
+        x: creep.pos.x,
+        y: creep.pos.y,
+        roomName: creep.pos.roomName
+    };
 }

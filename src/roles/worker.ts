@@ -1,4 +1,6 @@
 import { moveTo } from "../lib/trafficManager";
+import { runHarvest } from "../tasks/harvest";
+import { findTransferTarget, runTransfer } from "../tasks/transfer";
 
 /**
  * Role Behavior: Worker
@@ -50,10 +52,9 @@ function updateWorkerState(creep: Creep): void {
  * Execute harvesting behavior.
  */
 function executeHarvesting(creep: Creep): void {
-  const source = creep.pos.findClosestByRange(FIND_SOURCES_ACTIVE);
-  if (source && creep.harvest(source) === ERR_NOT_IN_RANGE) {
-    moveTo(creep, source.pos);
-  }
+  runHarvest(creep, {
+    move: moveTo,
+  });
 }
 
 /**
@@ -62,28 +63,14 @@ function executeHarvesting(creep: Creep): void {
 function findDeliveryTarget(
   creep: Creep,
 ): StructureExtension | StructureSpawn | null {
-  // Check cached target
-  if (creep.memory.transferTargetId) {
-    const target = Game.getObjectById(creep.memory.transferTargetId);
-    if (target && target.store.getFreeCapacity(RESOURCE_ENERGY) > 0) {
-      return target;
-    }
-    delete creep.memory.transferTargetId;
-  }
-
-  // Find new target
-  const target = creep.pos.findClosestByRange(FIND_MY_STRUCTURES, {
-    filter: (
-      s,
-    ): s is StructureExtension | StructureSpawn =>
-      (s.structureType === STRUCTURE_EXTENSION ||
-        s.structureType === STRUCTURE_SPAWN) &&
-      s.store.getFreeCapacity(RESOURCE_ENERGY) > 0,
-  });
+  const target = findTransferTarget(creep, creep.memory.transferTargetId);
 
   if (target) {
     creep.memory.transferTargetId = target.id;
+  } else {
+    delete creep.memory.transferTargetId;
   }
+
   return target;
 }
 
@@ -94,13 +81,15 @@ function executeDelivering(creep: Creep, ctx: WorkerContext): void {
   const target = findDeliveryTarget(creep);
 
   if (target) {
-    if (creep.transfer(target, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
-      moveTo(creep, target.pos);
-    }
-  } else if (ctx.controller) {
-    if (creep.upgradeController(ctx.controller) === ERR_NOT_IN_RANGE) {
-      moveTo(creep, ctx.controller.pos);
-    }
+    runTransfer(creep, {
+      target,
+      move: moveTo,
+    });
+    return;
+  }
+
+  if (creep.upgradeController(ctx.controller) === ERR_NOT_IN_RANGE) {
+    moveTo(creep, ctx.controller.pos);
   }
 }
 

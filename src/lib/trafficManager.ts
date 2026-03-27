@@ -4,13 +4,12 @@
  */
 export function moveTo(creep: Creep, targetPos: RoomPosition): void {
     // 1. Check if we are stuck
-    const isStuck = creep.memory._lastPos && 
-                    creep.pos.x === creep.memory._lastPos.x && 
-                    creep.pos.y === creep.memory._lastPos.y &&
-                    creep.pos.roomName === creep.memory._lastPos.roomName;
+    const isStuck = creep.pos.x === creep.memory._lastPos?.x && 
+                    creep.pos.y === creep.memory._lastPos?.y &&
+                    creep.pos.roomName === creep.memory._lastPos?.roomName;
 
     // 2. Move based on stuck status
-    const result = creep.moveTo(targetPos, {
+    creep.moveTo(targetPos, {
         reusePath: isStuck ? 0 : 20, // Re-path immediately if stuck
         visualizePathStyle: { 
             stroke: isStuck ? '#ff0000' : '#ffffff',

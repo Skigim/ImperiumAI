@@ -1,0 +1,6 @@
+{
+  "main": "dist/main.js",
+  "branch": "default",
+  "shard": "shard3",
+  "server": "https://screeps.com"
+}

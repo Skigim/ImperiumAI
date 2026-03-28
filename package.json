@@ -1,0 +1,30 @@
+{
+  "name": "project-imperium",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OS-style Screeps AI scaffold for Shard 3 with a CPU-aware TypeScript architecture.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\"",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "format": "prettier . --write",
+    "check-format": "prettier . --check",
+    "deploy": "node scripts/deploy-placeholder.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/lodash": "^4.17.17",
+    "@types/node": "^25.5.0",
+    "@types/screeps": "^3.3.8",
+    "eslint": "^10.1.0",
+    "eslint-config-prettier": "^10.1.1",
+    "globals": "^17.4.0",
+    "prettier": "^3.8.1",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.57.2"
+  }
+}

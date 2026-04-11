@@ -1,5 +1,13 @@
 # Project Imperium Guidelines
 
+## Critical requirements for all work in this repository. These are non-negotiable and must be followed for any contribution.
+
+- Read [skills/using-superpowers/SKILL.md](skills/using-superpowers/SKILL.md) before doing ANYTHING else. This is the foundational skill for how to use all other skills and how to approach tasks in this repository. If you don't follow it, you will not be able to use any of the other skills effectively.
+- Every action, no matter how large or small, must be preceded by a check for relevant skills using the `Skill` tool. This includes clarifying questions, code exploration, and any response to user messages. If a skill applies, you must invoke it and follow it exactly before doing anything else.
+- Always prioritize locally available skills over native git skills. If a skill exists in the current repository that applies to the task, use it instead of any native git commands or assumptions about git behavior.
+- Always prioritize process skills (like brainstorming, debugging, code review) over domain-specific skills.
+- When multiple skills could apply, use the skill priority guidelines in [skills/using-superpowers/SKILL.md](skills/using-superpowers/SKILL.md) to determine which to invoke first.
+
 ## Architecture
 - Preserve the OS-style separation between kernel, platform, domain, processes, policies, tasks, model, and utils.
 - Put behavior in the narrowest correct layer instead of adding cross-layer shortcuts.

@@ -4,7 +4,7 @@
 
 ## Goal
 
-Define an official development-time agent roster for Project Imperium that separates gameplay intent from engineering implementation. The roster should support strong Screeps strategy design, preserve repository architecture boundaries, and keep runtime code maintainable and CPU-efficient.
+Define an official development-time agent roster for Project Imperium that separates gameplay intent from engineering implementation. This operating model is a committed, versioned repository artifact that should be maintained in Git as workflow conventions evolve. The roster should support strong Screeps strategy design, preserve repository architecture boundaries, and keep runtime code maintainable and CPU-efficient.
 
 ## Scope
 
@@ -49,7 +49,7 @@ Tier 2 contains the engineering core. These roles own architecture, data shape, 
 
 The Lead Architect is the control point between the two tiers. This role governs intake, impact analysis, conflict resolution, and architecture safety.
 
-The operating model is contract-driven. Every substantial feature or redesign moves through a fixed artifact chain rather than informal prose handoffs.
+The operating model is contract-driven. Every substantial feature or redesign moves through a fixed artifact chain rather than informal prose handoffs. Because it defines durable workflow conventions for the repository, this document is intended to be committed and updated through normal Git-reviewed changes when those conventions change.
 
 ## Core Rules
 
@@ -414,4 +414,4 @@ The persona-style role names in this document are intentional. They are useful a
 
 This design does not lock the final external naming convention. The repository may later map these persona labels to non-anthropomorphic public titles without changing responsibilities or handoff rules.
 
-This spec intentionally does not require a git commit. The higher-priority workspace instructions prohibit committing unless explicitly requested.
+This spec is intended to be committed and maintained in Git as the authoritative workflow reference for the repository. Changes to the operating model should be made through normal reviewed repository updates, while any decision to create a commit in the current working session still follows the higher-priority workspace instruction that commits happen only when explicitly requested.

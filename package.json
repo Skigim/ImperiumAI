@@ -7,7 +7,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node scripts/build.mjs",
     "clean": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\"",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
@@ -20,6 +20,7 @@
     "@types/lodash": "^4.17.17",
     "@types/node": "^25.5.0",
     "@types/screeps": "^3.3.8",
+    "esbuild": "^0.28.0",
     "eslint": "^10.1.0",
     "eslint-config-prettier": "^10.1.1",
     "globals": "^17.4.0",

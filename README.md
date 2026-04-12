@@ -45,6 +45,8 @@ npm install
 npm run build
 ```
 
+This writes a single deployable bundle to `dist/main.js` so you can drag that file into a local Screeps server folder for testing.
+
 ### Type-check
 
 ```bash

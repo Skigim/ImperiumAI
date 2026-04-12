@@ -5,3 +5,5 @@ export interface RoomExecutionDomain {
 export const collectDomains = (): RoomExecutionDomain[] => {
   return [];
 };
+
+export * from './roomEconomy';

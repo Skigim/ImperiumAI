@@ -7,3 +7,5 @@ export const defaultCpuPolicy: CpuPolicy = {
   baseline: 20,
   burstBucketThreshold: 7500,
 };
+
+export * from './roomEconomyPolicy';

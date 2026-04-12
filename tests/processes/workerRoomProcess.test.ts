@@ -45,9 +45,14 @@ Object.assign(globalThis, {
   FIND_MY_STRUCTURES: 104,
   FIND_SOURCES: 105,
   FIND_STRUCTURES: 106,
+  FIND_CONSTRUCTION_SITES: 107,
   RESOURCE_ENERGY: 'energy',
   STRUCTURE_CONTAINER: 'container',
+  STRUCTURE_EXTENSION: 'extension',
   STRUCTURE_ROAD: 'road',
+  STRUCTURE_SPAWN: 'spawn',
+  STRUCTURE_TOWER: 'tower',
+  OK: 0,
 });
 
 const createEnergyStore = (energy: number, freeCapacity = 0): StoreDefinition => {
@@ -79,8 +84,10 @@ describe('worker room process', () => {
     Object.assign(globalThis, {
       Game: {
         getObjectById: vi.fn().mockReturnValue(null),
+        creeps: {},
         map: {
           getRoomLinearDistance: vi.fn().mockReturnValue(1),
+          describeExits: vi.fn().mockReturnValue({}),
         },
         rooms: {},
         time: 250,
@@ -632,5 +639,424 @@ describe('worker room process', () => {
 
     expect(runHarvest).not.toHaveBeenCalled();
     expect(creep.moveTo).not.toHaveBeenCalled();
+  });
+
+  it('spawns a generalist when the room has no workforce and an idle spawn', () => {
+    const source = {
+      id: 'source-1',
+      pos: { roomName: 'W1N1', getRangeTo: vi.fn().mockReturnValue(3) },
+    } as unknown as Source;
+    const spawn = {
+      id: 'spawn-1',
+      structureType: STRUCTURE_SPAWN,
+      pos: { x: 10, y: 10, roomName: 'W1N1' },
+      spawning: null,
+      spawnCreep: vi.fn().mockReturnValue(OK),
+      store: createEnergyStore(300, 0),
+    } as unknown as StructureSpawn;
+    const controller = {
+      id: 'controller-1',
+      level: 1,
+      my: true,
+      pos: { roomName: 'W1N1', getRangeTo: vi.fn().mockReturnValue(3) },
+    } as unknown as StructureController;
+    const room = {
+      name: 'W1N1',
+      controller,
+      energyAvailable: 300,
+      energyCapacityAvailable: 300,
+      memory: {},
+      createConstructionSite: vi.fn().mockReturnValue(OK),
+      find: vi.fn().mockImplementation((findConstant: number) => {
+        switch (findConstant) {
+          case FIND_MY_CREEPS:
+            return [];
+          case FIND_SOURCES:
+            return [source];
+          case FIND_HOSTILE_CREEPS:
+            return [];
+          case FIND_MY_STRUCTURES:
+            return [spawn];
+          case FIND_CONSTRUCTION_SITES:
+            return [];
+          default:
+            return [];
+        }
+      }),
+    } as unknown as Room;
+
+    Game.rooms[room.name] = room;
+
+    createWorkerRoomProcess(room.name).run({ tick: Game.time, cpuUsed: 0 });
+
+    expect(spawn.spawnCreep).toHaveBeenCalledOnce();
+    expect(spawn.spawnCreep).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.stringMatching(/^generalist-/),
+      expect.objectContaining({
+        memory: expect.objectContaining({
+          role: 'generalist',
+          homeRoomName: room.name,
+        }),
+      }),
+    );
+  });
+
+  it('places the first five extension construction sites once rcl2 is reached', () => {
+    const creep = createCreep('generalist', 0);
+    const source = {
+      id: 'source-1',
+      pos: { roomName: 'W1N1', getRangeTo: vi.fn().mockReturnValue(3) },
+    } as unknown as Source;
+    const spawn = {
+      id: 'spawn-1',
+      structureType: STRUCTURE_SPAWN,
+      pos: { x: 10, y: 10, roomName: 'W1N1' },
+      spawning: null,
+      spawnCreep: vi.fn().mockReturnValue(OK),
+      store: createEnergyStore(300, 0),
+    } as unknown as StructureSpawn;
+    const controller = {
+      id: 'controller-1',
+      level: 2,
+      my: true,
+      pos: { roomName: 'W1N1', getRangeTo: vi.fn().mockReturnValue(3) },
+    } as unknown as StructureController;
+    const room = {
+      name: 'W1N1',
+      controller,
+      energyAvailable: 300,
+      energyCapacityAvailable: 550,
+      memory: {},
+      createConstructionSite: vi.fn().mockReturnValue(OK),
+      find: vi.fn().mockImplementation((findConstant: number) => {
+        switch (findConstant) {
+          case FIND_MY_CREEPS:
+            return [creep];
+          case FIND_SOURCES:
+            return [source];
+          case FIND_HOSTILE_CREEPS:
+            return [];
+          case FIND_MY_STRUCTURES:
+            return [spawn];
+          case FIND_CONSTRUCTION_SITES:
+            return [];
+          default:
+            return [];
+        }
+      }),
+    } as unknown as Room;
+
+    Game.rooms[room.name] = room;
+
+    createWorkerRoomProcess(room.name).run({ tick: Game.time, cpuUsed: 0 });
+
+    expect(room.createConstructionSite).toHaveBeenCalledTimes(5);
+    expect(
+      room.createConstructionSite,
+    ).toHaveBeenNthCalledWith(1, expect.any(Number), expect.any(Number), STRUCTURE_EXTENSION);
+  });
+
+  it('spawns a stationary miner for a local source after the initial extension envelope is ready', () => {
+    const source = {
+      id: 'source-1',
+      pos: {
+        roomName: 'W1N1',
+        getRangeTo: vi.fn().mockReturnValue(3),
+        findInRange: vi.fn().mockReturnValue([
+          {
+            id: 'container-1',
+            structureType: STRUCTURE_CONTAINER,
+            pos: { x: 11, y: 10, roomName: 'W1N1' },
+          },
+        ]),
+      },
+    } as unknown as Source;
+    const spawn = {
+      id: 'spawn-1',
+      structureType: STRUCTURE_SPAWN,
+      pos: { x: 10, y: 10, roomName: 'W1N1' },
+      spawning: null,
+      spawnCreep: vi.fn().mockReturnValue(OK),
+      store: createEnergyStore(300, 0),
+    } as unknown as StructureSpawn;
+    const controller = {
+      id: 'controller-1',
+      level: 2,
+      my: true,
+      pos: { roomName: 'W1N1', getRangeTo: vi.fn().mockReturnValue(3) },
+    } as unknown as StructureController;
+    const room = {
+      name: 'W1N1',
+      controller,
+      energyAvailable: 550,
+      energyCapacityAvailable: 550,
+      memory: {},
+      createConstructionSite: vi.fn().mockReturnValue(OK),
+      find: vi.fn().mockImplementation((findConstant: number) => {
+        switch (findConstant) {
+          case FIND_MY_CREEPS:
+            return [];
+          case FIND_SOURCES:
+            return [source];
+          case FIND_HOSTILE_CREEPS:
+            return [];
+          case FIND_MY_STRUCTURES:
+            return [spawn];
+          case FIND_CONSTRUCTION_SITES:
+            return [];
+          default:
+            return [];
+        }
+      }),
+    } as unknown as Room;
+
+    Memory.imperium.rooms[room.name] = {
+      roomName: room.name,
+      lastSeenTick: Game.time,
+      economy: {
+        ...createDefaultRoomEconomyRecord(room.name),
+        cachedStructuralEnergyCapacity: 550,
+        extensionBuildoutComplete: true,
+        lastStructuralReviewTick: Game.time,
+        sourceRecords: {
+          [source.id]: createDefaultSourceEconomyRecord({
+            sourceId: source.id,
+            roomName: room.name,
+            classification: 'local',
+          }),
+        },
+      },
+    };
+    Game.rooms[room.name] = room;
+
+    summarizeRoomEconomySnapshot.mockReturnValue({
+      roomName: room.name,
+      controllerLevel: 2,
+      energyAvailable: room.energyAvailable,
+      energyCapacityAvailable: room.energyCapacityAvailable,
+      initialExtensionEnvelopeReady: true,
+      extensionBuildoutComplete: true,
+      hostileCount: 0,
+      localSourceIds: [source.id],
+      remoteSourceIds: [],
+    });
+
+    createWorkerRoomProcess(room.name).run({ tick: Game.time, cpuUsed: 0 });
+
+    expect(spawn.spawnCreep).toHaveBeenCalledOnce();
+    expect(spawn.spawnCreep).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.stringMatching(/^stationaryMiner-/),
+      expect.objectContaining({
+        memory: expect.objectContaining({
+          role: 'stationaryMiner',
+          assignedSourceId: source.id,
+          assignedRoomName: room.name,
+          homeRoomName: room.name,
+        }),
+      }),
+    );
+  });
+
+  it('seeds visible adjacent remote sources after local hardening completes', () => {
+    const creep = createCreep('generalist', 0);
+    const localSource = {
+      id: 'source-1',
+      pos: { roomName: 'W1N1', getRangeTo: vi.fn().mockReturnValue(3) },
+    } as unknown as Source;
+    const remoteSource = {
+      id: 'remote-source-1',
+      pos: { roomName: 'W1N2', x: 20, y: 20, getRangeTo: vi.fn().mockReturnValue(3) },
+    } as unknown as Source;
+    const spawn = {
+      id: 'spawn-1',
+      structureType: STRUCTURE_SPAWN,
+      pos: { x: 10, y: 10, roomName: 'W1N1' },
+      spawning: null,
+      spawnCreep: vi.fn().mockReturnValue(OK),
+      store: createEnergyStore(300, 0),
+    } as unknown as StructureSpawn;
+    const controller = {
+      id: 'controller-1',
+      level: 2,
+      my: true,
+      pos: { roomName: 'W1N1', getRangeTo: vi.fn().mockReturnValue(3) },
+    } as unknown as StructureController;
+    const room = {
+      name: 'W1N1',
+      controller,
+      energyAvailable: 550,
+      energyCapacityAvailable: 550,
+      memory: {},
+      createConstructionSite: vi.fn().mockReturnValue(OK),
+      find: vi.fn().mockImplementation((findConstant: number) => {
+        switch (findConstant) {
+          case FIND_MY_CREEPS:
+            return [creep];
+          case FIND_SOURCES:
+            return [localSource];
+          case FIND_HOSTILE_CREEPS:
+            return [];
+          case FIND_MY_STRUCTURES:
+            return [spawn];
+          case FIND_CONSTRUCTION_SITES:
+            return [];
+          default:
+            return [];
+        }
+      }),
+    } as unknown as Room;
+    const remoteRoom = {
+      name: 'W1N2',
+      controller: { my: false },
+      find: vi.fn().mockImplementation((findConstant: number) => {
+        return findConstant === FIND_SOURCES ? [remoteSource] : [];
+      }),
+    } as unknown as Room;
+
+    const localRecord = createDefaultSourceEconomyRecord({
+      sourceId: localSource.id,
+      roomName: room.name,
+      classification: 'local',
+    });
+    localRecord.state = 'logistics-active';
+
+    Memory.imperium.rooms[room.name] = {
+      roomName: room.name,
+      lastSeenTick: Game.time,
+      economy: {
+        ...createDefaultRoomEconomyRecord(room.name),
+        cachedStructuralEnergyCapacity: 550,
+        extensionBuildoutComplete: true,
+        localSourceHardeningComplete: true,
+        lastStructuralReviewTick: Game.time,
+        sourceRecords: {
+          [localSource.id]: localRecord,
+        },
+      },
+    };
+
+    Game.rooms[room.name] = room;
+    Game.rooms[remoteRoom.name] = remoteRoom;
+    Game.map.describeExits = vi.fn().mockReturnValue({ 1: remoteRoom.name });
+
+    summarizeRoomEconomySnapshot.mockReturnValue({
+      roomName: room.name,
+      controllerLevel: 2,
+      energyAvailable: room.energyAvailable,
+      energyCapacityAvailable: room.energyCapacityAvailable,
+      initialExtensionEnvelopeReady: true,
+      extensionBuildoutComplete: true,
+      hostileCount: 0,
+      localSourceIds: [localSource.id],
+      remoteSourceIds: [],
+    });
+
+    createWorkerRoomProcess(room.name).run({ tick: Game.time, cpuUsed: 0 });
+
+    expect(Memory.imperium.rooms[room.name]?.economy.sourceRecords[remoteSource.id]).toMatchObject({
+      sourceId: remoteSource.id,
+      classification: 'remote',
+      roomName: remoteRoom.name,
+      designatedMiningTile: { x: 20, y: 20, roomName: remoteRoom.name },
+    });
+  });
+
+  it('spawns a scout for an unseen adjacent room after local hardening completes', () => {
+    const creep = createCreep('generalist', 0);
+    const localSource = {
+      id: 'source-1',
+      pos: { roomName: 'W1N1', getRangeTo: vi.fn().mockReturnValue(3) },
+    } as unknown as Source;
+    const spawn = {
+      id: 'spawn-1',
+      structureType: STRUCTURE_SPAWN,
+      pos: { x: 10, y: 10, roomName: 'W1N1' },
+      spawning: null,
+      spawnCreep: vi.fn().mockReturnValue(OK),
+      store: createEnergyStore(300, 0),
+    } as unknown as StructureSpawn;
+    const controller = {
+      id: 'controller-1',
+      level: 2,
+      my: true,
+      pos: { roomName: 'W1N1', getRangeTo: vi.fn().mockReturnValue(3) },
+    } as unknown as StructureController;
+    const room = {
+      name: 'W1N1',
+      controller,
+      energyAvailable: 550,
+      energyCapacityAvailable: 550,
+      memory: {},
+      createConstructionSite: vi.fn().mockReturnValue(OK),
+      find: vi.fn().mockImplementation((findConstant: number) => {
+        switch (findConstant) {
+          case FIND_MY_CREEPS:
+            return [creep];
+          case FIND_SOURCES:
+            return [localSource];
+          case FIND_HOSTILE_CREEPS:
+            return [];
+          case FIND_MY_STRUCTURES:
+            return [spawn];
+          case FIND_CONSTRUCTION_SITES:
+            return [];
+          default:
+            return [];
+        }
+      }),
+    } as unknown as Room;
+
+    const localRecord = createDefaultSourceEconomyRecord({
+      sourceId: localSource.id,
+      roomName: room.name,
+      classification: 'local',
+    });
+    localRecord.state = 'logistics-active';
+
+    Memory.imperium.rooms[room.name] = {
+      roomName: room.name,
+      lastSeenTick: Game.time,
+      economy: {
+        ...createDefaultRoomEconomyRecord(room.name),
+        cachedStructuralEnergyCapacity: 550,
+        extensionBuildoutComplete: true,
+        localSourceHardeningComplete: true,
+        lastStructuralReviewTick: Game.time,
+        sourceRecords: {
+          [localSource.id]: localRecord,
+        },
+      },
+    };
+
+    Game.rooms[room.name] = room;
+    Game.map.describeExits = vi.fn().mockReturnValue({ 1: 'W1N2' });
+
+    summarizeRoomEconomySnapshot.mockReturnValue({
+      roomName: room.name,
+      controllerLevel: 2,
+      energyAvailable: room.energyAvailable,
+      energyCapacityAvailable: room.energyCapacityAvailable,
+      initialExtensionEnvelopeReady: true,
+      extensionBuildoutComplete: true,
+      hostileCount: 0,
+      localSourceIds: [localSource.id],
+      remoteSourceIds: [],
+    });
+
+    createWorkerRoomProcess(room.name).run({ tick: Game.time, cpuUsed: 0 });
+
+    expect(spawn.spawnCreep).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.stringMatching(/^scout-/),
+      expect.objectContaining({
+        memory: expect.objectContaining({
+          role: 'scout',
+          assignedRoomName: 'W1N2',
+          homeRoomName: room.name,
+        }),
+      }),
+    );
   });
 });

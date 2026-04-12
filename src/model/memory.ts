@@ -451,11 +451,18 @@ export const initializeMemory = (): void => {
 
 declare global {
   interface CreepMemory {
-    role?: 'worker' | 'generalist' | 'bootstrapBuilder' | 'stationaryMiner' | 'routeHauler';
+    role?:
+      | 'worker'
+      | 'generalist'
+      | 'bootstrapBuilder'
+      | 'stationaryMiner'
+      | 'routeHauler'
+      | 'scout';
     harvesting?: boolean;
     transferTargetId?: Id<StructureExtension | StructureSpawn>;
     assignedSourceId?: Id<Source>;
     assignedRoomName?: string;
+    homeRoomName?: string;
   }
 
   interface RoomMemory {

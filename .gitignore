@@ -4,3 +4,4 @@ dist/
 .screeps.json
 coverage/
 .vscode/
+.worktrees/

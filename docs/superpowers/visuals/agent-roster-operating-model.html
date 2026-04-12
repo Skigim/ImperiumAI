@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Project Imperium Agent Roster</title>
+  <style>
+    :root {
+      --bg: #f5efe4;
+      --panel: #fffaf1;
+      --ink: #1f2430;
+      --muted: #5c667a;
+      --line: #c9b89b;
+      --tier1: #d98752;
+      --tier2: #3f6c7a;
+      --accent: #8f3d2e;
+      --ok: #567a46;
+      --shadow: 0 18px 40px rgba(31, 36, 48, 0.12);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: Georgia, "Times New Roman", serif;
+      background:
+        radial-gradient(circle at top left, rgba(217, 135, 82, 0.18), transparent 28%),
+        radial-gradient(circle at top right, rgba(63, 108, 122, 0.18), transparent 26%),
+        linear-gradient(180deg, #fbf6ec 0%, var(--bg) 100%);
+      color: var(--ink);
+    }
+
+    .page {
+      max-width: 1360px;
+      margin: 0 auto;
+      padding: 40px 24px 56px;
+    }
+
+    h1 {
+      margin: 0 0 10px;
+      font-size: clamp(2rem, 4vw, 3.6rem);
+      line-height: 1.05;
+      letter-spacing: -0.03em;
+    }
+
+    .subtitle {
+      max-width: 980px;
+      margin: 0 0 26px;
+      color: var(--muted);
+      font-size: 1.05rem;
+      line-height: 1.5;
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 28px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      border-radius: 999px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
+      font-size: 0.95rem;
+    }
+
+    .dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 999px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1.05fr 0.1fr 1.05fr;
+      gap: 18px;
+      align-items: start;
+    }
+
+    .tier {
+      background: rgba(255, 250, 241, 0.88);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      box-shadow: var(--shadow);
+      padding: 22px;
+      backdrop-filter: blur(8px);
+    }
+
+    .tier h2 {
+      margin: 0 0 6px;
+      font-size: 1.55rem;
+    }
+
+    .tier p {
+      margin: 0 0 18px;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
+    .role {
+      border-radius: 18px;
+      padding: 16px;
+      margin-bottom: 14px;
+      color: #fff;
+    }
+
+    .role:last-child {
+      margin-bottom: 0;
+    }
+
+    .tier1 .role {
+      background: linear-gradient(145deg, #d98752 0%, #b8653b 100%);
+    }
+
+    .tier2 .role {
+      background: linear-gradient(145deg, #3f6c7a 0%, #2a4e5b 100%);
+    }
+
+    .role h3 {
+      margin: 0 0 8px;
+      font-size: 1.18rem;
+    }
+
+    .role .tag {
+      display: inline-block;
+      margin-bottom: 10px;
+      padding: 5px 9px;
+      border: 1px solid rgba(255, 255, 255, 0.35);
+      border-radius: 999px;
+      font-size: 0.78rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .role ul {
+      margin: 0;
+      padding-left: 18px;
+      line-height: 1.45;
+    }
+
+    .bridge {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100%;
+      padding-top: 84px;
+    }
+
+    .bridge-card {
+      width: 100%;
+      background: linear-gradient(180deg, #fffdf8 0%, #f2ead8 100%);
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      box-shadow: var(--shadow);
+      padding: 18px 14px;
+      text-align: center;
+    }
+
+    .bridge-card h3 {
+      margin: 0 0 10px;
+      color: var(--accent);
+      font-size: 1.1rem;
+    }
+
+    .arrow {
+      font-size: 1.6rem;
+      color: var(--accent);
+      line-height: 1;
+      margin: 10px 0;
+    }
+
+    .artifact {
+      margin: 8px 0;
+      padding: 8px 10px;
+      border-radius: 12px;
+      background: rgba(143, 61, 46, 0.08);
+      color: var(--ink);
+      font-size: 0.92rem;
+      font-weight: 600;
+    }
+
+    .flow {
+      margin-top: 28px;
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .step {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 16px;
+      box-shadow: var(--shadow);
+      min-height: 140px;
+    }
+
+    .step-number {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 34px;
+      height: 34px;
+      border-radius: 999px;
+      font-weight: 700;
+      color: #fff;
+      background: var(--ok);
+      margin-bottom: 10px;
+    }
+
+    .step h4 {
+      margin: 0 0 8px;
+      font-size: 1rem;
+    }
+
+    .step p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.45;
+      font-size: 0.94rem;
+    }
+
+    .priority {
+      margin-top: 28px;
+      background: #201d22;
+      color: #f7f0e6;
+      border-radius: 24px;
+      padding: 24px;
+      box-shadow: var(--shadow);
+    }
+
+    .priority h2 {
+      margin: 0 0 14px;
+      font-size: 1.4rem;
+    }
+
+    .priority-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .priority-item {
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 16px;
+      padding: 14px;
+      background: rgba(255, 255, 255, 0.04);
+    }
+
+    .priority-item strong {
+      display: block;
+      margin-bottom: 6px;
+      color: #ffd29d;
+    }
+
+    .note {
+      margin-top: 20px;
+      color: #d6c9b8;
+      line-height: 1.5;
+    }
+
+    @media (max-width: 1120px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      .bridge {
+        padding-top: 0;
+      }
+
+      .flow {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .priority-grid {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+
+    @media (max-width: 720px) {
+      .page {
+        padding: 24px 14px 40px;
+      }
+
+      .flow,
+      .priority-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <h1>Project Imperium Studio Roster</h1>
+    <p class="subtitle">
+      Development-time operating model for a CPU-aware Screeps bot. Tier 1 defines the gameplay intent.
+      Tier 2 turns those specs into bounded, typed, architecture-consistent TypeScript.
+    </p>
+
+    <div class="legend">
+      <div class="pill"><span class="dot" style="background: var(--tier1);"></span>Tier 1: Domain Consultants</div>
+      <div class="pill"><span class="dot" style="background: var(--tier2);"></span>Tier 2: Engineering Core</div>
+      <div class="pill"><span class="dot" style="background: var(--ok);"></span>Fast-track allowed for config-only tuning</div>
+    </div>
+
+    <section class="grid">
+      <div class="tier tier1">
+        <h2>Tier 1: The What</h2>
+        <p>These roles define formulas, thresholds, behavior rules, and acceptance criteria. They do not write production code.</p>
+
+        <article class="role">
+          <div class="tag">Domain Consultant</div>
+          <h3>Economy Analyst</h3>
+          <ul>
+            <li>Mining efficiency and hauling throughput math</li>
+            <li>Spawn-energy service levels and reserve bands</li>
+            <li>Upgrade pressure and recovery policy</li>
+          </ul>
+        </article>
+
+        <article class="role">
+          <div class="tag">Domain Consultant</div>
+          <h3>Combat Tactician</h3>
+          <ul>
+            <li>Tower target logic and defense matrices</li>
+            <li>Defender composition and siege posture</li>
+            <li>Safe-mode triggers and offensive doctrine</li>
+          </ul>
+        </article>
+
+        <article class="role">
+          <div class="tag">Domain Consultant</div>
+          <h3>Expansion Planner</h3>
+          <ul>
+            <li>Scouting requirements and room scoring</li>
+            <li>Reserve versus claim rules</li>
+            <li>Remote viability and bootstrap milestones</li>
+          </ul>
+        </article>
+
+        <article class="role">
+          <div class="tag">Domain Consultant</div>
+          <h3>Industry Analyst</h3>
+          <ul>
+            <li>Terminals, labs, boosts, factory chains</li>
+            <li>Market policy and commodity balancing</li>
+            <li>Multi-room resource routing intent</li>
+          </ul>
+        </article>
+      </div>
+
+      <div class="bridge">
+        <div class="bridge-card">
+          <h3>Lead Architect Gate</h3>
+          <div class="artifact">Domain Brief</div>
+          <div class="arrow">↓</div>
+          <div class="artifact">Architecture Impact Note</div>
+          <div class="arrow">↓</div>
+          <div class="artifact">State Contract</div>
+          <div class="arrow">↓</div>
+          <div class="artifact">Implementation Change Set</div>
+          <div class="arrow">↓</div>
+          <div class="artifact">Verification Report</div>
+        </div>
+      </div>
+
+      <div class="tier tier2">
+        <h2>Tier 2: The How</h2>
+        <p>These roles protect the kernel, memory model, and CPU budget while implementing the approved gameplay semantics.</p>
+
+        <article class="role">
+          <div class="tag">Engineering Core</div>
+          <h3>Lead Architect</h3>
+          <ul>
+            <li>Maps specs onto Imperium layers</li>
+            <li>Classifies CPU risk and affected systems</li>
+            <li>Breaks ties using the priority hierarchy</li>
+          </ul>
+        </article>
+
+        <article class="role">
+          <div class="tag">Engineering Core</div>
+          <h3>State &amp; Memory Engineer</h3>
+          <ul>
+            <li>Owns interfaces, memory schema, and cache shape</li>
+            <li>Defines lifecycle, cleanup, and serialization rules</li>
+            <li>Prevents Memory bloat and contract drift</li>
+          </ul>
+        </article>
+
+        <article class="role">
+          <div class="tag">Engineering Core</div>
+          <h3>Implementation Dev</h3>
+          <ul>
+            <li>Writes bounded per-tick TypeScript logic</li>
+            <li>Reuses shared primitives instead of duplicating systems</li>
+            <li>Optimizes without silently changing gameplay semantics</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="flow">
+      <div class="step">
+        <div class="step-number">1</div>
+        <h4>Domain Brief</h4>
+        <p>Tier 1 submits formulas, constraints, edge cases, and non-goals.</p>
+      </div>
+      <div class="step">
+        <div class="step-number">2</div>
+        <h4>Architecture Intake</h4>
+        <p>The Architect scopes layers, files, CPU risk, and whether fast-track is allowed.</p>
+      </div>
+      <div class="step">
+        <div class="step-number">3</div>
+        <h4>State Contract</h4>
+        <p>If data changes are needed, memory ownership and lifecycle rules are formalized.</p>
+      </div>
+      <div class="step">
+        <div class="step-number">4</div>
+        <h4>Implementation</h4>
+        <p>Engineering builds the approved behavior using kernel-safe, DRY abstractions.</p>
+      </div>
+      <div class="step">
+        <div class="step-number">5</div>
+        <h4>Verification</h4>
+        <p>Check acceptance criteria, degraded mode, CPU expectations, and type safety.</p>
+      </div>
+    </section>
+
+    <section class="priority">
+      <h2>Global Priority Hierarchy</h2>
+      <div class="priority-grid">
+        <div class="priority-item"><strong>1. Kernel Safety</strong>Main loop, scheduler stability, bounded execution.</div>
+        <div class="priority-item"><strong>2. Emergency Defense</strong>Immediate hostile response and catastrophic protection.</div>
+        <div class="priority-item"><strong>3. Room Survival</strong>Downgrade prevention, energy continuity, minimum colony function.</div>
+        <div class="priority-item"><strong>4. State Safety</strong>Memory integrity, schema correctness, cleanup guarantees.</div>
+        <div class="priority-item"><strong>5. Economy Continuity</strong>Income, hauling, spawn service, reserve stability.</div>
+        <div class="priority-item"><strong>6. Expansion Progress</strong>Claims, reserves, remotes, and bootstrap sequencing.</div>
+        <div class="priority-item"><strong>7. Industry Optimization</strong>Labs, terminals, boosts, factory, market.</div>
+        <div class="priority-item"><strong>8. Opportunistic Offense</strong>Discretionary combat and nonessential aggression.</div>
+      </div>
+      <p class="note">
+        Fast-track lane: Tier 1 may update existing tuning surfaces directly, but the change still requires an automated TypeScript compile or lint pass before it is considered safe.
+      </p>
+    </section>
+  </main>
+</body>
+</html>

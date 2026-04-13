@@ -1,8 +1,13 @@
 import {
+  createDefaultBootstrapState,
   createDefaultRoomEconomyRecord,
   createDefaultSourceHealthRecord,
   createDefaultSourceEconomyRecord,
   createRouteThroughputModel,
+  type BootstrapAssignmentClass,
+  type BootstrapDeliveryMode,
+  type BootstrapFetchRequest,
+  type BootstrapState,
   type PersistedRoomPosition,
   type RoomEconomyRecord,
   type RouteThroughputModel,
@@ -10,9 +15,10 @@ import {
   type SourceEconomyRecord,
   type SourceEconomyState,
   type SourceHealthRecord,
+  type SourceSlotClaim,
 } from './roomEconomy';
 
-export const MEMORY_SCHEMA_VERSION = 2;
+export const MEMORY_SCHEMA_VERSION = 3;
 
 export interface KernelMemory {
   lastTick: number | null;
@@ -89,6 +95,34 @@ const SOURCE_STATES = new Set<SourceEconomyState>([
   'logistics-active',
   'degraded-local',
   'suspended',
+]);
+
+const BOOTSTRAP_PHASES = new Set<BootstrapState['phase']>([
+  'bootstrap-shuttle',
+  'extension-build',
+  'exit-charge',
+  'stationary-transition',
+  'complete',
+]);
+
+const BOOTSTRAP_ASSIGNMENT_CLASSES = new Set<BootstrapAssignmentClass>([
+  'shuttle',
+  'overflow-build-hauler',
+  'stationary-miner',
+  'bootstrap-builder',
+]);
+
+const BOOTSTRAP_DELIVERY_MODES = new Set<BootstrapDeliveryMode>([
+  'harvest',
+  'deliver',
+  'rerouted',
+  'build',
+  'charge',
+]);
+
+const BOOTSTRAP_FETCH_STATUSES = new Set<BootstrapFetchRequest['status']>([
+  'pending',
+  'matched',
 ]);
 
 const PROCESS_STATES = new Set<ProcessMemoryRecord['state']>([
@@ -251,17 +285,247 @@ const normalizeSourceRecords = (
     return {};
   }
 
-  const sourceRecords: RoomEconomyRecord['sourceRecords'] = {};
+  const normalizedEntries = new Map<
+    Id<Source>,
+    { record: SourceEconomyRecord; sourceKey: string }
+  >();
 
   for (const [sourceKey, sourceValue] of Object.entries(value)) {
     const normalized = normalizeSourceEconomyRecord(roomName, sourceKey, sourceValue);
 
-    if (normalized) {
-      sourceRecords[sourceKey] = normalized;
+    if (!normalized) {
+      continue;
+    }
+
+    const existing = normalizedEntries.get(normalized.sourceId);
+
+    if (!existing) {
+      normalizedEntries.set(normalized.sourceId, {
+        record: normalized,
+        sourceKey,
+      });
+      continue;
+    }
+
+    const incomingIsCanonical = sourceKey === normalized.sourceId;
+    const existingIsCanonical = existing.sourceKey === normalized.sourceId;
+
+    if (incomingIsCanonical && !existingIsCanonical) {
+      normalizedEntries.set(normalized.sourceId, {
+        record: normalized,
+        sourceKey,
+      });
     }
   }
 
-  return sourceRecords;
+  return Object.fromEntries(
+    [...normalizedEntries.entries()].map(([sourceId, entry]) => [sourceId, entry.record]),
+  ) as RoomEconomyRecord['sourceRecords'];
+};
+
+const normalizeSourceSlotClaim = (value: unknown): SourceSlotClaim | null => {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const hasMeaningfulClaimData =
+    typeof value.occupantCreepName === 'string' ||
+    typeof value.reservedAtTick === 'number' ||
+    value.claimState === 'open' ||
+    value.claimState === 'reserved' ||
+    value.claimState === 'occupied';
+
+  if (!hasMeaningfulClaimData) {
+    return null;
+  }
+
+  return {
+    occupantCreepName:
+      typeof value.occupantCreepName === 'string'
+        ? value.occupantCreepName
+        : null,
+    claimState:
+      value.claimState === 'reserved' || value.claimState === 'occupied'
+        ? value.claimState
+        : 'open',
+    reservedAtTick:
+      typeof value.reservedAtTick === 'number' ? value.reservedAtTick : 0,
+  };
+};
+
+const normalizeSourceSlots = (value: unknown): BootstrapState['sourceSlots'] => {
+  if (!isRecord(value)) {
+    return {};
+  }
+
+  const sourceSlots: BootstrapState['sourceSlots'] = {};
+
+  for (const [sourceId, slotMap] of Object.entries(value)) {
+    if (!isRecord(slotMap)) {
+      continue;
+    }
+
+    const normalizedSlotMap: Record<string, BootstrapState['sourceSlots'][string][string]> = {};
+
+    for (const [slotKey, slotValue] of Object.entries(slotMap)) {
+      const normalizedClaim = normalizeSourceSlotClaim(slotValue);
+
+      if (normalizedClaim) {
+        normalizedSlotMap[slotKey] = normalizedClaim;
+      }
+    }
+
+    if (Object.keys(normalizedSlotMap).length > 0) {
+      sourceSlots[sourceId] = normalizedSlotMap;
+    }
+  }
+
+  return sourceSlots;
+};
+
+const normalizeBootstrapSourceId = (value: unknown): Id<Source> | null => {
+  return typeof value === 'string' ? (value as Id<Source>) : null;
+};
+
+const normalizeBootstrapSlotKey = (value: unknown): string | null => {
+  return typeof value === 'string' ? value : null;
+};
+
+const normalizeBootstrapAssignments = (
+  value: unknown,
+): BootstrapState['assignments'] => {
+  if (!isRecord(value)) {
+    return {};
+  }
+
+  const assignments: BootstrapState['assignments'] = {};
+
+  for (const [assignmentKey, assignmentValue] of Object.entries(value)) {
+    if (!isRecord(assignmentValue)) {
+      continue;
+    }
+
+    if (
+      typeof assignmentValue.creepName !== 'string' ||
+      !BOOTSTRAP_ASSIGNMENT_CLASSES.has(
+        assignmentValue.assignmentClass as BootstrapAssignmentClass,
+      ) ||
+      !BOOTSTRAP_DELIVERY_MODES.has(
+        assignmentValue.deliveryMode as BootstrapDeliveryMode,
+      )
+    ) {
+      continue;
+    }
+
+    assignments[assignmentKey] = {
+      creepName: assignmentValue.creepName,
+      assignmentClass:
+        assignmentValue.assignmentClass as BootstrapAssignmentClass,
+      sourceId: normalizeBootstrapSourceId(assignmentValue.sourceId),
+      slotKey: normalizeBootstrapSlotKey(assignmentValue.slotKey),
+      deliveryMode: assignmentValue.deliveryMode as BootstrapDeliveryMode,
+    };
+  }
+
+  return assignments;
+};
+
+const normalizeBootstrapFetchRequests = (
+  value: unknown,
+): BootstrapState['fetchRequests'] => {
+  if (!isRecord(value)) {
+    return {};
+  }
+
+  const fetchRequests: BootstrapState['fetchRequests'] = {};
+
+  for (const [requestKey, requestValue] of Object.entries(value)) {
+    if (
+      !isRecord(requestValue) ||
+      typeof requestValue.creepName !== 'string' ||
+      typeof requestValue.requestedAtTick !== 'number' ||
+      !BOOTSTRAP_FETCH_STATUSES.has(
+        requestValue.status as BootstrapFetchRequest['status'],
+      )
+    ) {
+      continue;
+    }
+
+    fetchRequests[requestKey] = {
+      creepName: requestValue.creepName,
+      status: requestValue.status as BootstrapFetchRequest['status'],
+      requestedAtTick: requestValue.requestedAtTick,
+      assignedShuttleName:
+        typeof requestValue.assignedShuttleName === 'string'
+          ? requestValue.assignedShuttleName
+          : null,
+    };
+  }
+
+  return fetchRequests;
+};
+
+const normalizeBootstrapReroutes = (
+  value: unknown,
+): BootstrapState['reroutes'] => {
+  if (!isRecord(value)) {
+    return {};
+  }
+
+  const reroutes: BootstrapState['reroutes'] = {};
+
+  for (const [rerouteKey, rerouteValue] of Object.entries(value)) {
+    if (
+      !isRecord(rerouteValue) ||
+      typeof rerouteValue.shuttleName !== 'string' ||
+      typeof rerouteValue.targetHaulerName !== 'string'
+    ) {
+      continue;
+    }
+
+    reroutes[rerouteKey] = {
+      shuttleName: rerouteValue.shuttleName,
+      targetHaulerName: rerouteValue.targetHaulerName,
+      sourceId: normalizeBootstrapSourceId(rerouteValue.sourceId),
+    };
+  }
+
+  return reroutes;
+};
+
+const normalizeActiveExtensionSiteId = (
+  value: unknown,
+): Id<ConstructionSite<BuildableStructureConstant>> | null => {
+  if (typeof value === 'string') {
+    return value as Id<ConstructionSite<BuildableStructureConstant>>;
+  }
+
+  return null;
+};
+
+const normalizeBootstrapState = (value: unknown): BootstrapState => {
+  const defaults = createDefaultBootstrapState();
+
+  if (!isRecord(value)) {
+    return defaults;
+  }
+
+  return {
+    phase: BOOTSTRAP_PHASES.has(value.phase as BootstrapState['phase'])
+      ? (value.phase as BootstrapState['phase'])
+      : defaults.phase,
+    activeExtensionSiteId: normalizeActiveExtensionSiteId(
+      value.activeExtensionSiteId,
+    ),
+    lastExtensionPlacementTick:
+      typeof value.lastExtensionPlacementTick === 'number'
+        ? value.lastExtensionPlacementTick
+        : defaults.lastExtensionPlacementTick,
+    sourceSlots: normalizeSourceSlots(value.sourceSlots),
+    assignments: normalizeBootstrapAssignments(value.assignments),
+    fetchRequests: normalizeBootstrapFetchRequests(value.fetchRequests),
+    reroutes: normalizeBootstrapReroutes(value.reroutes),
+  };
 };
 
 const normalizeProcessRecord = (
@@ -394,6 +658,7 @@ const normalizeRoomEconomyRecord = (
         ? value.lastRemoteRiskReviewTick
         : defaults.lastRemoteRiskReviewTick,
     sourceRecords: normalizeSourceRecords(roomName, value.sourceRecords),
+    bootstrap: normalizeBootstrapState(value.bootstrap),
   };
 };
 
@@ -463,6 +728,10 @@ declare global {
     assignedSourceId?: Id<Source>;
     assignedRoomName?: string;
     homeRoomName?: string;
+    bootstrapAssignmentClass?: BootstrapAssignmentClass;
+    bootstrapSlotKey?: string;
+    bootstrapDeliveryMode?: BootstrapDeliveryMode;
+    bootstrapFetchRequesting?: boolean;
   }
 
   interface RoomMemory {
@@ -471,5 +740,3 @@ declare global {
 
   interface Memory extends RootMemory {}
 }
-
-export {};

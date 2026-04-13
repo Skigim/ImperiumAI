@@ -71,6 +71,63 @@ export interface SourceEconomyRecord {
   throughput: RouteThroughputModel;
 }
 
+export type BootstrapPhase =
+  | 'bootstrap-shuttle'
+  | 'extension-build'
+  | 'exit-charge'
+  | 'stationary-transition'
+  | 'complete';
+
+export type BootstrapAssignmentClass =
+  | 'shuttle'
+  | 'overflow-build-hauler'
+  | 'stationary-miner'
+  | 'bootstrap-builder';
+
+export type BootstrapDeliveryMode =
+  | 'harvest'
+  | 'deliver'
+  | 'rerouted'
+  | 'build'
+  | 'charge';
+
+export interface SourceSlotClaim {
+  occupantCreepName: string | null;
+  claimState: 'open' | 'reserved' | 'occupied';
+  reservedAtTick: number;
+}
+
+export interface BootstrapAssignmentRecord {
+  creepName: string;
+  assignmentClass: BootstrapAssignmentClass;
+  sourceId: Id<Source> | null;
+  slotKey: string | null;
+  deliveryMode: BootstrapDeliveryMode;
+}
+
+export interface BootstrapFetchRequest {
+  creepName: string;
+  status: 'pending' | 'matched';
+  requestedAtTick: number;
+  assignedShuttleName: string | null;
+}
+
+export interface BootstrapRerouteRecord {
+  shuttleName: string;
+  targetHaulerName: string;
+  sourceId: Id<Source> | null;
+}
+
+export interface BootstrapState {
+  phase: BootstrapPhase;
+  activeExtensionSiteId: Id<ConstructionSite<BuildableStructureConstant>> | null;
+  lastExtensionPlacementTick: number;
+  sourceSlots: Record<string, Record<string, SourceSlotClaim>>;
+  assignments: Record<string, BootstrapAssignmentRecord>;
+  fetchRequests: Record<string, BootstrapFetchRequest>;
+  reroutes: Record<string, BootstrapRerouteRecord>;
+}
+
 export interface RoomEconomyRecord {
   roomName: string;
   phase: RoomEconomyPhase;
@@ -81,6 +138,7 @@ export interface RoomEconomyRecord {
   lastStructuralReviewTick: number;
   lastRemoteRiskReviewTick: number;
   sourceRecords: Record<string, SourceEconomyRecord>;
+  bootstrap: BootstrapState;
 }
 
 export const createDefaultSourceHealthRecord = (): SourceHealthRecord => ({
@@ -115,6 +173,16 @@ export const createDefaultSourceEconomyRecord = (input: {
   throughput: createRouteThroughputModel(),
 });
 
+export const createDefaultBootstrapState = (): BootstrapState => ({
+  phase: 'bootstrap-shuttle',
+  activeExtensionSiteId: null,
+  lastExtensionPlacementTick: 0,
+  sourceSlots: {},
+  assignments: {},
+  fetchRequests: {},
+  reroutes: {},
+});
+
 export const createDefaultRoomEconomyRecord = (roomName: string): RoomEconomyRecord => ({
   roomName,
   phase: 'bootstrap',
@@ -125,4 +193,5 @@ export const createDefaultRoomEconomyRecord = (roomName: string): RoomEconomyRec
   lastStructuralReviewTick: 0,
   lastRemoteRiskReviewTick: 0,
   sourceRecords: {},
+  bootstrap: createDefaultBootstrapState(),
 });

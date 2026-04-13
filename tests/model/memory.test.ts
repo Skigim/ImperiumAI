@@ -5,6 +5,10 @@ import {
   MEMORY_SCHEMA_VERSION,
 } from '../../src/model/memory';
 
+const hasOwn = (value: object, key: PropertyKey): boolean => {
+  return Object.prototype.hasOwnProperty.call(value, key);
+};
+
 describe('memory model', () => {
   beforeEach(() => {
     vi.unstubAllGlobals();
@@ -47,7 +51,7 @@ describe('memory model', () => {
               roomName: 'W1N1',
               phase: 'bootstrap',
               sourceRecords: {
-                'source-1': {
+                stale_source_key: {
                   sourceId: 'source-1',
                   roomName: 'legacy-room-name',
                   classification: 'local',
@@ -130,6 +134,15 @@ describe('memory model', () => {
           currentCommissioningSourceId: null,
           lastStructuralReviewTick: 0,
           lastRemoteRiskReviewTick: 0,
+          bootstrap: {
+            phase: 'bootstrap-shuttle',
+            activeExtensionSiteId: null,
+            lastExtensionPlacementTick: 0,
+            sourceSlots: {},
+            assignments: {},
+            fetchRequests: {},
+            reroutes: {},
+          },
           sourceRecords: {
             'source-1': {
               sourceId: 'source-1',
@@ -193,7 +206,392 @@ describe('memory model', () => {
         },
       },
     });
+    const normalizedRoomW1N1 = Memory.imperium.rooms.W1N1;
+    expect(normalizedRoomW1N1).toBeDefined();
+    if (normalizedRoomW1N1 === undefined) {
+      throw new Error('Expected W1N1 room memory to be initialized');
+    }
+    expect(hasOwn(normalizedRoomW1N1.economy.sourceRecords, 'stale_source_key')).toBe(
+      false,
+    );
     expect(Memory.imperium.kernel.lastTick).toBe(12345);
     expect(Memory.imperium.kernel.scheduler.lastRunCpu).toBe(4.2);
+  });
+
+  it('normalizes bootstrap room economy state while pruning sparse invalid slot claims', () => {
+    vi.stubGlobal('Game', {
+      shard: { name: 'shard3' },
+      time: 200,
+      cpu: {
+        getUsed: () => 1.5,
+      },
+    });
+    vi.stubGlobal('Memory', {
+      imperium: {
+        schemaVersion: MEMORY_SCHEMA_VERSION - 1,
+        shard: 'legacy',
+        kernel: {
+          lastTick: 10,
+          scheduler: {
+            lastRunCpu: 3,
+          },
+        },
+        processes: {},
+        rooms: {
+          W1N1: {
+            roomName: 'W1N1',
+            lastSeenTick: 150,
+            economy: {
+              roomName: 'W1N1',
+              phase: 'bootstrap',
+              sourceRecords: {},
+              bootstrap: {
+                phase: 'extension-build',
+                activeExtensionSiteId: 'site-1',
+                sourceSlots: {
+                  sourceA: {
+                    '10,20': {
+                      occupantCreepName: 'shuttle-1',
+                      claimState: 'occupied',
+                    },
+                    '11,20': 'invalid',
+                    '12,20': {
+                      occupantCreepName: 'shuttle-2',
+                      claimState: 'bad-state',
+                    },
+                    '13,20': {},
+                    '14,20': {
+                      occupantCreepName: 42,
+                      claimState: 'bad-state',
+                    },
+                  },
+                  sourceB: {
+                    '15,20': {},
+                  },
+                },
+                assignments: {
+                  shuttle_1: {
+                    creepName: 'shuttle-1',
+                    assignmentClass: 'shuttle',
+                    sourceId: 'sourceA',
+                    slotKey: '10,20',
+                    deliveryMode: 'rerouted',
+                  },
+                  hauler_1: {
+                    creepName: 'hauler-1',
+                    assignmentClass: 'overflow-build-hauler',
+                    sourceId: null,
+                    slotKey: null,
+                    deliveryMode: 'build',
+                  },
+                  invalid_assignment: {
+                    assignmentClass: 'bootstrap-builder',
+                    sourceId: 'sourceA',
+                    slotKey: '10,20',
+                    deliveryMode: 'build',
+                  },
+                },
+                fetchRequests: {
+                  hauler_1: {
+                    creepName: 'hauler-1',
+                    status: 'matched',
+                    requestedAtTick: 180,
+                    assignedShuttleName: 'shuttle-1',
+                  },
+                  invalid_fetch: {
+                    status: 'pending',
+                    requestedAtTick: 181,
+                  },
+                },
+                reroutes: {
+                  shuttle_1: {
+                    shuttleName: 'shuttle-1',
+                    targetHaulerName: 'hauler-1',
+                    sourceId: 'sourceA',
+                  },
+                  shuttle_2: {
+                    shuttleName: 'shuttle-2',
+                    targetHaulerName: 'hauler-2',
+                    sourceId: null,
+                  },
+                  invalid_reroute: {
+                    targetHaulerName: 'hauler-2',
+                    sourceId: 'sourceB',
+                  },
+                },
+              },
+            },
+          },
+          W1N2: {
+            roomName: 'W1N2',
+            lastSeenTick: 151,
+            economy: {
+              roomName: 'W1N2',
+              phase: 'bootstrap',
+              sourceRecords: {},
+              bootstrap: 'invalid',
+            },
+          },
+        },
+        intel: {},
+      } as never,
+    });
+
+    initializeMemory();
+
+    const roomW1N1 = Memory.imperium.rooms.W1N1;
+    expect(roomW1N1).toBeDefined();
+    if (roomW1N1 === undefined) {
+      throw new Error('Expected W1N1 room memory to be initialized');
+    }
+
+    expect(roomW1N1.economy.bootstrap).toEqual({
+      phase: 'extension-build',
+      activeExtensionSiteId: 'site-1',
+      lastExtensionPlacementTick: 0,
+      sourceSlots: {
+        sourceA: {
+          '10,20': {
+            occupantCreepName: 'shuttle-1',
+            claimState: 'occupied',
+            reservedAtTick: 0,
+          },
+          '12,20': {
+            occupantCreepName: 'shuttle-2',
+            claimState: 'open',
+            reservedAtTick: 0,
+          },
+        },
+      },
+      assignments: {
+        shuttle_1: {
+          creepName: 'shuttle-1',
+          assignmentClass: 'shuttle',
+          sourceId: 'sourceA',
+          slotKey: '10,20',
+          deliveryMode: 'rerouted',
+        },
+        hauler_1: {
+          creepName: 'hauler-1',
+          assignmentClass: 'overflow-build-hauler',
+          sourceId: null,
+          slotKey: null,
+          deliveryMode: 'build',
+        },
+      },
+      fetchRequests: {
+        hauler_1: {
+          creepName: 'hauler-1',
+          status: 'matched',
+          requestedAtTick: 180,
+          assignedShuttleName: 'shuttle-1',
+        },
+      },
+      reroutes: {
+        shuttle_1: {
+          shuttleName: 'shuttle-1',
+          targetHaulerName: 'hauler-1',
+          sourceId: 'sourceA',
+        },
+        shuttle_2: {
+          shuttleName: 'shuttle-2',
+          targetHaulerName: 'hauler-2',
+          sourceId: null,
+        },
+      },
+    });
+
+    const roomW1N2 = Memory.imperium.rooms.W1N2;
+    expect(roomW1N2).toBeDefined();
+    if (roomW1N2 === undefined) {
+      throw new Error('Expected W1N2 room memory to be initialized');
+    }
+
+    expect(roomW1N2.economy.bootstrap).toEqual({
+      phase: 'bootstrap-shuttle',
+      activeExtensionSiteId: null,
+      lastExtensionPlacementTick: 0,
+      sourceSlots: {},
+      assignments: {},
+      fetchRequests: {},
+      reroutes: {},
+    });
+  });
+
+  it('canonicalizes normalized source records by normalized sourceId', () => {
+    vi.stubGlobal('Game', {
+      shard: { name: 'shard3' },
+      time: 400,
+      cpu: {
+        getUsed: () => 0.75,
+      },
+    });
+    vi.stubGlobal('Memory', {
+      imperium: {
+        schemaVersion: MEMORY_SCHEMA_VERSION - 1,
+        shard: 'legacy',
+        kernel: {
+          lastTick: 10,
+          scheduler: {
+            lastRunCpu: 3,
+          },
+        },
+        processes: {},
+        rooms: {
+          W1N1: {
+            roomName: 'W1N1',
+            lastSeenTick: 150,
+            economy: {
+              roomName: 'W1N1',
+              phase: 'bootstrap',
+              sourceRecords: {
+                stale_source_key: {
+                  sourceId: 'source-live',
+                  classification: 'local',
+                },
+                'source-live': {
+                  sourceId: 'source-live',
+                  classification: 'remote',
+                  state: 'road-bootstrap',
+                },
+                'source-fallback': {
+                  classification: 'remote',
+                },
+              },
+            },
+          },
+        },
+        intel: {},
+      } as never,
+    });
+
+    initializeMemory();
+
+    const roomW1N1 = Memory.imperium.rooms.W1N1;
+    expect(roomW1N1).toBeDefined();
+    if (roomW1N1 === undefined) {
+      throw new Error('Expected W1N1 room memory to be initialized');
+    }
+
+    expect(roomW1N1.economy.sourceRecords).toEqual({
+      'source-live': {
+        sourceId: 'source-live',
+        roomName: 'W1N1',
+        classification: 'remote',
+        state: 'road-bootstrap',
+        designatedMiningTile: null,
+        containerId: null,
+        containerPosition: null,
+        roadAnchor: null,
+        logisticsStopId: null,
+        assignedMinerName: null,
+        assignedBuilderNames: [],
+        assignedHaulerNames: [],
+        requiredSpawnEnergyCapacity: 300,
+        health: {
+          lastStructurallyValidTick: 0,
+          lastServicedTick: 0,
+          routeRiskScore: 0,
+          hostilePresenceStreak: 0,
+          logisticsStarvationStreak: 0,
+          pendingReplacement: false,
+          reactivationCooldownUntil: 0,
+        },
+        throughput: {
+          expectedPickupPerCycle: 0,
+          expectedMaintenanceBleedPerCycle: 0,
+          expectedNetDeliveryPerCycle: 0,
+        },
+      },
+      'source-fallback': {
+        sourceId: 'source-fallback',
+        roomName: 'W1N1',
+        classification: 'remote',
+        state: 'bootstrap-candidate',
+        designatedMiningTile: null,
+        containerId: null,
+        containerPosition: null,
+        roadAnchor: null,
+        logisticsStopId: null,
+        assignedMinerName: null,
+        assignedBuilderNames: [],
+        assignedHaulerNames: [],
+        requiredSpawnEnergyCapacity: 300,
+        health: {
+          lastStructurallyValidTick: 0,
+          lastServicedTick: 0,
+          routeRiskScore: 0,
+          hostilePresenceStreak: 0,
+          logisticsStarvationStreak: 0,
+          pendingReplacement: false,
+          reactivationCooldownUntil: 0,
+        },
+        throughput: {
+          expectedPickupPerCycle: 0,
+          expectedMaintenanceBleedPerCycle: 0,
+          expectedNetDeliveryPerCycle: 0,
+        },
+      },
+    });
+  });
+
+  it('prefers the canonical outer source key when a stale duplicate is encountered later', () => {
+    vi.stubGlobal('Game', {
+      shard: { name: 'shard3' },
+      time: 401,
+      cpu: {
+        getUsed: () => 0.8,
+      },
+    });
+    vi.stubGlobal('Memory', {
+      imperium: {
+        schemaVersion: MEMORY_SCHEMA_VERSION - 1,
+        shard: 'legacy',
+        kernel: {
+          lastTick: 10,
+          scheduler: {
+            lastRunCpu: 3,
+          },
+        },
+        processes: {},
+        rooms: {
+          W1N1: {
+            roomName: 'W1N1',
+            lastSeenTick: 150,
+            economy: {
+              roomName: 'W1N1',
+              phase: 'bootstrap',
+              sourceRecords: {
+                'source-live': {
+                  sourceId: 'source-live',
+                  classification: 'remote',
+                  state: 'road-bootstrap',
+                },
+                stale_source_key: {
+                  sourceId: 'source-live',
+                  classification: 'local',
+                },
+              },
+            },
+          },
+        },
+        intel: {},
+      } as never,
+    });
+
+    initializeMemory();
+
+    const roomW1N1 = Memory.imperium.rooms.W1N1;
+    expect(roomW1N1).toBeDefined();
+    if (roomW1N1 === undefined) {
+      throw new Error('Expected W1N1 room memory to be initialized');
+    }
+
+    expect(roomW1N1.economy.sourceRecords['source-live']).toMatchObject({
+      sourceId: 'source-live',
+      classification: 'remote',
+      state: 'road-bootstrap',
+    });
+    expect(hasOwn(roomW1N1.economy.sourceRecords, 'stale_source_key')).toBe(false);
   });
 });

@@ -14,6 +14,19 @@ export interface RoomEconomySnapshot {
   remoteSourceIds: readonly Id<Source>[];
 }
 
+export interface BootstrapRoomSnapshot {
+  roomName: string;
+  controllerLevel: number;
+  energyAvailable: number;
+  energyCapacityAvailable: number;
+  extensionCount: number;
+  localSourceIds: readonly Id<Source>[];
+  hostileCount: number;
+  initialExtensionEnvelopeReady: boolean;
+  exitChargeReady: boolean;
+  canAffordWcmm: boolean;
+}
+
 export const detectStructuralEnvelopeChange = (
   previousCapacity: number,
   currentCapacity: number,
@@ -27,6 +40,13 @@ export interface InitialExtensionEnvelopeReadinessInput {
   extensionCount: number;
 }
 
+export interface BootstrapExitChargeReadinessInput {
+  controllerLevel: number;
+  extensionCount: number;
+  energyCapacityAvailable: number;
+  energyAvailable: number;
+}
+
 export const isInitialExtensionEnvelopeReady = (
   input: InitialExtensionEnvelopeReadinessInput,
 ): boolean => {
@@ -35,6 +55,51 @@ export const isInitialExtensionEnvelopeReady = (
     input.energyCapacityAvailable >= 550 &&
     input.extensionCount >= 5
   );
+};
+
+export const isBootstrapExitChargeReady = (
+  input: BootstrapExitChargeReadinessInput,
+): boolean => {
+  return (
+    input.controllerLevel >= 2 &&
+    input.extensionCount >= 5 &&
+    input.energyCapacityAvailable >= 550 &&
+    input.energyAvailable >= 550
+  );
+};
+
+export const summarizeBootstrapRoomSnapshot = (input: {
+  roomName: string;
+  controllerLevel: number;
+  energyAvailable: number;
+  energyCapacityAvailable: number;
+  extensionCount: number;
+  localSourceIds: readonly Id<Source>[];
+  hostileCount: number;
+}): BootstrapRoomSnapshot => {
+  const initialExtensionEnvelopeReady = isInitialExtensionEnvelopeReady({
+    controllerLevel: input.controllerLevel,
+    energyCapacityAvailable: input.energyCapacityAvailable,
+    extensionCount: input.extensionCount,
+  });
+
+  return {
+    roomName: input.roomName,
+    controllerLevel: input.controllerLevel,
+    energyAvailable: input.energyAvailable,
+    energyCapacityAvailable: input.energyCapacityAvailable,
+    extensionCount: input.extensionCount,
+    localSourceIds: [...input.localSourceIds],
+    hostileCount: input.hostileCount,
+    initialExtensionEnvelopeReady,
+    exitChargeReady: isBootstrapExitChargeReady({
+      controllerLevel: input.controllerLevel,
+      extensionCount: input.extensionCount,
+      energyCapacityAvailable: input.energyCapacityAvailable,
+      energyAvailable: input.energyAvailable,
+    }),
+    canAffordWcmm: input.energyAvailable >= 250,
+  };
 };
 
 export const summarizeRoomEconomySnapshot = (input: {

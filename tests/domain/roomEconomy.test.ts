@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  isBootstrapExitChargeReady,
   detectStructuralEnvelopeChange,
   isInitialExtensionEnvelopeReady,
+  summarizeBootstrapRoomSnapshot,
   summarizeRoomEconomySnapshot,
 } from '../../src/domain/roomEconomy';
 
@@ -133,5 +135,110 @@ describe('room economy domain', () => {
     expect(snapshot.remoteSourceIds).not.toBe(remoteSourceIds);
     expect(snapshot.localSourceIds).toEqual(['a', 'b']);
     expect(snapshot.remoteSourceIds).toEqual(['c']);
+  });
+
+  it('requires the full bootstrap exit-charge envelope before reporting readiness', () => {
+    expect(
+      isBootstrapExitChargeReady({
+        controllerLevel: 2,
+        extensionCount: 5,
+        energyCapacityAvailable: 550,
+        energyAvailable: 550,
+      }),
+    ).toBe(true);
+
+    expect(
+      isBootstrapExitChargeReady({
+        controllerLevel: 1,
+        extensionCount: 5,
+        energyCapacityAvailable: 550,
+        energyAvailable: 550,
+      }),
+    ).toBe(false);
+
+    expect(
+      isBootstrapExitChargeReady({
+        controllerLevel: 2,
+        extensionCount: 4,
+        energyCapacityAvailable: 550,
+        energyAvailable: 550,
+      }),
+    ).toBe(false);
+
+    expect(
+      isBootstrapExitChargeReady({
+        controllerLevel: 2,
+        extensionCount: 5,
+        energyCapacityAvailable: 500,
+        energyAvailable: 550,
+      }),
+    ).toBe(false);
+
+    expect(
+      isBootstrapExitChargeReady({
+        controllerLevel: 2,
+        extensionCount: 5,
+        energyCapacityAvailable: 550,
+        energyAvailable: 500,
+      }),
+    ).toBe(false);
+  });
+
+  it('summarizes the bootstrap room state with copied local source ids and readiness flags', () => {
+    const localSourceIds: Id<Source>[] = ['a' as Id<Source>, 'b' as Id<Source>];
+
+    const snapshot = summarizeBootstrapRoomSnapshot({
+      roomName: 'W2N2',
+      controllerLevel: 2,
+      energyAvailable: 550,
+      energyCapacityAvailable: 550,
+      extensionCount: 5,
+      localSourceIds,
+      hostileCount: 1,
+    });
+
+    localSourceIds.push('c' as Id<Source>);
+
+    expect(snapshot).toMatchObject({
+      roomName: 'W2N2',
+      controllerLevel: 2,
+      energyAvailable: 550,
+      energyCapacityAvailable: 550,
+      extensionCount: 5,
+      localSourceIds: ['a', 'b'],
+      hostileCount: 1,
+      initialExtensionEnvelopeReady: true,
+      exitChargeReady: true,
+      canAffordWcmm: true,
+    });
+    expect(snapshot.localSourceIds).not.toBe(localSourceIds);
+
+    const lowEnergySnapshot = summarizeBootstrapRoomSnapshot({
+      roomName: 'W2N2',
+      controllerLevel: 2,
+      energyAvailable: 249,
+      energyCapacityAvailable: 550,
+      extensionCount: 5,
+      localSourceIds,
+      hostileCount: 0,
+    });
+
+    expect(lowEnergySnapshot.initialExtensionEnvelopeReady).toBe(true);
+    expect(lowEnergySnapshot.exitChargeReady).toBe(false);
+    expect(lowEnergySnapshot.canAffordWcmm).toBe(false);
+
+    const boundaryEnergySnapshot = summarizeBootstrapRoomSnapshot({
+      roomName: 'W2N2',
+      controllerLevel: 1,
+      energyAvailable: 250,
+      energyCapacityAvailable: 300,
+      extensionCount: 4,
+      localSourceIds,
+      hostileCount: 0,
+    });
+
+    expect(boundaryEnergySnapshot.initialExtensionEnvelopeReady).toBe(false);
+    expect(boundaryEnergySnapshot.exitChargeReady).toBe(false);
+    expect(boundaryEnergySnapshot.canAffordWcmm).toBe(true);
   });
 });

@@ -55,6 +55,32 @@ describe('room economy policy', () => {
     ).toBe('stationary-transition');
   });
 
+  it('selects exit-charge once the five-extension envelope is built but not fully charged', () => {
+    expect(
+      deriveBootstrapPhase({
+        controllerLevel: 2,
+        extensionCount: 5,
+        energyAvailable: 500,
+        energyCapacityAvailable: 550,
+        localSourceIds: ['source-a' as Id<Source>, 'source-b' as Id<Source>],
+        stationaryTransitionComplete: false,
+      }),
+    ).toBe('exit-charge');
+  });
+
+  it('selects complete once the stationary transition is marked done', () => {
+    expect(
+      deriveBootstrapPhase({
+        controllerLevel: 2,
+        extensionCount: 5,
+        energyAvailable: 550,
+        energyCapacityAvailable: 550,
+        localSourceIds: ['source-a' as Id<Source>, 'source-b' as Id<Source>],
+        stationaryTransitionComplete: true,
+      }),
+    ).toBe('complete');
+  });
+
   it('chooses the least-staffed shuttle source while counting assignments and reserved slots', () => {
     expect(
       chooseBootstrapShuttleSource({
@@ -154,6 +180,33 @@ describe('room economy policy', () => {
         openSlotCount: 0,
       }),
     ).toBe('overflow-build-hauler');
+  });
+
+  it('classifies stationary-transition bootstrap spawns as stationary miners', () => {
+    expect(
+      classifyBootstrapSpawn({
+        phase: 'stationary-transition',
+        openSlotCount: 0,
+      }),
+    ).toBe('stationary-miner');
+  });
+
+  it('returns no bootstrap spawn classification during exit-charge', () => {
+    expect(
+      classifyBootstrapSpawn({
+        phase: 'exit-charge',
+        openSlotCount: 2,
+      }),
+    ).toBeNull();
+  });
+
+  it('returns no bootstrap spawn classification once bootstrap is complete', () => {
+    expect(
+      classifyBootstrapSpawn({
+        phase: 'complete',
+        openSlotCount: 2,
+      }),
+    ).toBeNull();
   });
 
   it('promotes a local source into stationary-online once the container is live and the room can spawn the miner', () => {

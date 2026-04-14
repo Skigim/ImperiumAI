@@ -12,7 +12,9 @@ import type { PersistedRoomPosition, SourceEconomyRecord } from '../model/roomEc
 import {
   advanceSourceState,
   applyPassiveRemoteRecovery,
+  chooseBootstrapShuttleSource,
   chooseNextCommissioningSource,
+  classifyBootstrapSpawn,
   deriveBootstrapCleanupEffects,
   deriveBootstrapPhase,
   deriveRoomPhase,
@@ -29,6 +31,7 @@ const REMOTE_DISTANCE_BASE = 25;
 const REMOTE_LINEAR_ROOM_MULTIPLIER = 50;
 const REPAIR_THRESHOLD = 25;
 const GENERALIST_BODY: BodyPartConstant[] = ['work', 'carry', 'move'];
+const BOOTSTRAP_SHUTTLE_BODY: BodyPartConstant[] = ['work', 'carry', 'move', 'move'];
 const BUILDER_BODY: BodyPartConstant[] = ['work', 'carry', 'move'];
 const SCOUT_BODY: BodyPartConstant[] = ['move'];
 const ROUTE_HAULER_BODY: BodyPartConstant[] = ['work', 'carry', 'carry', 'move'];
@@ -637,6 +640,79 @@ const ensureSingleBootstrapExtensionSite = (
   roomMemory.economy.bootstrap.lastExtensionPlacementTick = Game.time;
 };
 
+const countOpenBootstrapSlots = (
+  sourceSlots: RoomDomainMemory['economy']['bootstrap']['sourceSlots'],
+): number => {
+  return Object.values(sourceSlots).reduce((sum, slotMap) => {
+    return sum + Object.values(slotMap).filter((slot) => slot.claimState === 'open').length;
+  }, 0);
+};
+
+const reserveBootstrapSlot = (
+  roomMemory: RoomDomainMemory,
+  sourceId: Id<Source>,
+  creepName: string,
+): string | null => {
+  const slotMap = roomMemory.economy.bootstrap.sourceSlots[sourceId] ?? {};
+  const entry = Object.entries(slotMap).find(([, slot]) => slot.claimState === 'open');
+
+  if (!entry) {
+    return null;
+  }
+
+  const [slotKey, slot] = entry;
+  slot.claimState = 'reserved';
+  slot.occupantCreepName = creepName;
+  slot.reservedAtTick = Game.time;
+  return slotKey;
+};
+
+const matchBootstrapFetchRequests = (
+  roomMemory: RoomDomainMemory,
+  creepsByName: Map<string, Creep>,
+): void => {
+  for (const request of Object.values(roomMemory.economy.bootstrap.fetchRequests)) {
+    if (request.status !== 'pending') {
+      continue;
+    }
+
+    const hauler = creepsByName.get(request.creepName);
+
+    if (!hauler) {
+      continue;
+    }
+
+    const shuttleName = Object.values(roomMemory.economy.bootstrap.assignments)
+      .filter((assignment) => {
+        return assignment.assignmentClass === 'shuttle' && assignment.deliveryMode === 'deliver';
+      })
+      .map((assignment) => assignment.creepName)
+      .sort((left, right) => {
+        const leftCreep = creepsByName.get(left);
+        const rightCreep = creepsByName.get(right);
+
+        return (leftCreep?.pos.getRangeTo(hauler) ?? 99) - (rightCreep?.pos.getRangeTo(hauler) ?? 99);
+      })[0];
+
+    if (!shuttleName) {
+      continue;
+    }
+
+    roomMemory.economy.bootstrap.reroutes[shuttleName] = {
+      shuttleName,
+      targetHaulerName: request.creepName,
+      sourceId: roomMemory.economy.bootstrap.assignments[shuttleName]?.sourceId ?? null,
+    };
+    request.status = 'matched';
+    request.assignedShuttleName = shuttleName;
+    const shuttleAssignment = roomMemory.economy.bootstrap.assignments[shuttleName];
+
+    if (shuttleAssignment) {
+      shuttleAssignment.deliveryMode = 'rerouted';
+    }
+  }
+};
+
 const reevaluateSourceRecord = (
   sourceRecord: SourceEconomyRecord,
   source: Source,
@@ -1156,10 +1232,67 @@ export const createWorkerRoomProcess = (roomName: string): KernelProcess => {
         Game.time,
       );
 
+      const creepsByName = new Map(creeps.map((creep) => [creep.name, creep] as const));
+      matchBootstrapFetchRequests(roomMemory, creepsByName);
+
       roomMemory.lastSeenTick = Game.time;
       room.memory.workerCount = creeps.length;
 
-      spawnNeededCreep(room, economy, creeps, snapshot);
+      let bootstrapSpawnHandled = false;
+      const openSlotCount = countOpenBootstrapSlots(roomMemory.economy.bootstrap.sourceSlots);
+
+      if (room.energyAvailable >= 250 && openSlotCount > 0) {
+        const assignmentClass = classifyBootstrapSpawn({
+          phase: roomMemory.economy.bootstrap.phase,
+          openSlotCount,
+        });
+
+        if (assignmentClass === 'shuttle') {
+          const idleSpawn = getIdleSpawn(room);
+
+          if (idleSpawn) {
+            const sourceId = chooseBootstrapShuttleSource({
+              localSourceIds: snapshot.localSourceIds,
+              assignments: roomMemory.economy.bootstrap.assignments,
+              sourceSlots: roomMemory.economy.bootstrap.sourceSlots,
+            });
+
+            if (sourceId) {
+              const creepName = `bootstrap-${Game.time}`;
+              const slotKey = reserveBootstrapSlot(roomMemory, sourceId, creepName);
+
+              if (slotKey) {
+                const spawnResult = idleSpawn.spawnCreep(BOOTSTRAP_SHUTTLE_BODY, creepName, {
+                  memory: {
+                    role: 'worker',
+                    assignedSourceId: sourceId,
+                    bootstrapAssignmentClass: 'shuttle',
+                    bootstrapSlotKey: slotKey,
+                    bootstrapDeliveryMode: 'harvest',
+                    homeRoomName: room.name,
+                  },
+                });
+
+                if (spawnResult !== OK) {
+                  const slot = roomMemory.economy.bootstrap.sourceSlots[sourceId]?.[slotKey];
+
+                  if (slot) {
+                    slot.claimState = 'open';
+                    slot.occupantCreepName = null;
+                    slot.reservedAtTick = 0;
+                  }
+                } else {
+                  bootstrapSpawnHandled = true;
+                }
+              }
+            }
+          }
+        }
+      }
+
+      if (!bootstrapSpawnHandled) {
+        spawnNeededCreep(room, economy, creeps, snapshot);
+      }
 
       for (const creep of creeps) {
         switch (creep.memory.role) {

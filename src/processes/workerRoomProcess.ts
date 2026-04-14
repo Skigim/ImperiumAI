@@ -13,6 +13,8 @@ import {
   advanceSourceState,
   applyPassiveRemoteRecovery,
   chooseNextCommissioningSource,
+  deriveBootstrapCleanupEffects,
+  deriveBootstrapPhase,
   deriveRoomPhase,
   REMOTE_RISK_REVIEW_INTERVAL,
 } from '../policies/roomEconomyPolicy';
@@ -549,6 +551,92 @@ const syncSourceAssignments = (
   }
 };
 
+const ensureBootstrapSourceSlots = (
+  roomMemory: RoomDomainMemory,
+  localSources: readonly Source[],
+): void => {
+  for (const source of localSources) {
+    roomMemory.economy.bootstrap.sourceSlots[source.id] ??= {};
+  }
+};
+
+const cleanupDeadBootstrapAssignments = (
+  roomMemory: RoomDomainMemory,
+  liveCreepNames: Set<string>,
+): void => {
+  for (const creepName of Object.keys(roomMemory.economy.bootstrap.assignments)) {
+    if (liveCreepNames.has(creepName)) {
+      continue;
+    }
+
+    const cleanup = deriveBootstrapCleanupEffects({
+      deadCreepName: creepName,
+      assignments: roomMemory.economy.bootstrap.assignments,
+      reroutes: roomMemory.economy.bootstrap.reroutes,
+    });
+
+    if (cleanup.clearedSourceId && cleanup.clearedSlotKey) {
+      const slot =
+        roomMemory.economy.bootstrap.sourceSlots[cleanup.clearedSourceId]?.[
+          cleanup.clearedSlotKey
+        ];
+
+      if (slot) {
+        slot.occupantCreepName = null;
+        slot.claimState = 'open';
+        slot.reservedAtTick = 0;
+      }
+    }
+
+    if (cleanup.affectedHaulerName) {
+      const request = roomMemory.economy.bootstrap.fetchRequests[cleanup.affectedHaulerName];
+
+      if (request) {
+        request.status = 'pending';
+        request.assignedShuttleName = null;
+      }
+    }
+
+    delete roomMemory.economy.bootstrap.reroutes[creepName];
+    delete roomMemory.economy.bootstrap.assignments[creepName];
+  }
+};
+
+const ensureSingleBootstrapExtensionSite = (
+  room: Room,
+  roomMemory: RoomDomainMemory,
+): void => {
+  if (
+    roomMemory.economy.bootstrap.phase !== 'extension-build' ||
+    room.energyCapacityAvailable < 550
+  ) {
+    roomMemory.economy.bootstrap.activeExtensionSiteId = null;
+    return;
+  }
+
+  const existingExtensionSites = getConstructionSites(room).filter((site) => {
+    return site.structureType === STRUCTURE_EXTENSION;
+  });
+
+  if (existingExtensionSites.length > 0) {
+    roomMemory.economy.bootstrap.activeExtensionSiteId = existingExtensionSites[0]?.id ?? null;
+    return;
+  }
+
+  if (roomMemory.economy.bootstrap.lastExtensionPlacementTick === Game.time) {
+    return;
+  }
+
+  const spawn = getOwnedSpawns(room)[0];
+
+  if (!spawn) {
+    return;
+  }
+
+  placeLayoutSites(room, spawn.pos, INITIAL_EXTENSION_LAYOUT, STRUCTURE_EXTENSION, 1);
+  roomMemory.economy.bootstrap.lastExtensionPlacementTick = Game.time;
+};
+
 const reevaluateSourceRecord = (
   sourceRecord: SourceEconomyRecord,
   source: Source,
@@ -953,6 +1041,12 @@ export const createWorkerRoomProcess = (roomName: string): KernelProcess => {
 
       ensureLocalSourceRecords(room, localSources);
 
+      const creeps = getManagedCreeps(room);
+      const liveCreepNames = new Set(creeps.map((creep) => creep.name));
+
+      ensureBootstrapSourceSlots(roomMemory, localSources);
+      cleanupDeadBootstrapAssignments(roomMemory, liveCreepNames);
+
       const economy = roomMemory.economy;
       seedVisibleRemoteSourceRecords(room, economy);
 
@@ -987,12 +1081,26 @@ export const createWorkerRoomProcess = (roomName: string): KernelProcess => {
         economy.lastStructuralReviewTick = Game.time;
       }
 
-      const creeps = getManagedCreeps(room);
+      economy.bootstrap.phase = deriveBootstrapPhase({
+        controllerLevel: snapshot.controllerLevel,
+        extensionCount: shouldRunStructuralReview
+          ? countExtensions(room)
+          : snapshot.extensionBuildoutComplete
+            ? 5
+            : 0,
+        energyAvailable: room.energyAvailable,
+        energyCapacityAvailable: room.energyCapacityAvailable,
+        localSourceIds: snapshot.localSourceIds,
+        stationaryTransitionComplete: false,
+      });
+
       syncSourceAssignments(economy, creeps);
 
-      if (shouldRunStructuralReview) {
+      if (shouldRunStructuralReview && economy.bootstrap.phase !== 'extension-build') {
         ensureRoomLevelConstructionSites(room);
       }
+
+      ensureSingleBootstrapExtensionSite(room, roomMemory);
 
       for (const localSource of localSources) {
         const sourceRecord = economy.sourceRecords[localSource.id];

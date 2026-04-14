@@ -678,7 +678,13 @@ describe('worker room process', () => {
           case FIND_MY_STRUCTURES:
             return [spawn];
           case FIND_CONSTRUCTION_SITES:
-            return [];
+            return [
+              {
+                id: 'road-site-1',
+                structureType: STRUCTURE_ROAD,
+                pos: { x: 12, y: 10, roomName: 'W1N1' },
+              },
+            ];
           default:
             return [];
         }
@@ -702,19 +708,34 @@ describe('worker room process', () => {
     );
   });
 
-  it('places the first five extension construction sites once rcl2 is reached', () => {
-    const creep = createCreep('generalist', 0);
+  it('updates bootstrap phase and creates only one extension site during RCL2 buildout', () => {
+    const container = {
+      id: 'container-1',
+      structureType: STRUCTURE_CONTAINER,
+      pos: { x: 11, y: 10, roomName: 'W1N1' },
+    } as unknown as StructureContainer;
+    const road = {
+      id: 'road-1',
+      structureType: STRUCTURE_ROAD,
+      pos: { x: 12, y: 10, roomName: 'W1N1' },
+    } as unknown as StructureRoad;
     const source = {
-      id: 'source-1',
-      pos: { roomName: 'W1N1', getRangeTo: vi.fn().mockReturnValue(3) },
+      id: 'source-a',
+      pos: {
+        roomName: 'W1N1',
+        x: 10,
+        y: 10,
+        getRangeTo: vi.fn().mockReturnValue(3),
+        findInRange: vi.fn().mockReturnValue([container, road]),
+      },
     } as unknown as Source;
     const spawn = {
       id: 'spawn-1',
       structureType: STRUCTURE_SPAWN,
-      pos: { x: 10, y: 10, roomName: 'W1N1' },
+      pos: { x: 25, y: 25, roomName: 'W1N1' },
       spawning: null,
       spawnCreep: vi.fn().mockReturnValue(OK),
-      store: createEnergyStore(300, 0),
+      store: createEnergyStore(250, 50),
     } as unknown as StructureSpawn;
     const controller = {
       id: 'controller-1',
@@ -722,17 +743,18 @@ describe('worker room process', () => {
       my: true,
       pos: { roomName: 'W1N1', getRangeTo: vi.fn().mockReturnValue(3) },
     } as unknown as StructureController;
+    const createConstructionSite = vi.fn().mockReturnValue(OK);
     const room = {
       name: 'W1N1',
       controller,
-      energyAvailable: 300,
+      energyAvailable: 250,
       energyCapacityAvailable: 550,
       memory: {},
-      createConstructionSite: vi.fn().mockReturnValue(OK),
+      createConstructionSite,
       find: vi.fn().mockImplementation((findConstant: number) => {
         switch (findConstant) {
           case FIND_MY_CREEPS:
-            return [creep];
+            return [];
           case FIND_SOURCES:
             return [source];
           case FIND_HOSTILE_CREEPS:
@@ -747,14 +769,170 @@ describe('worker room process', () => {
       }),
     } as unknown as Room;
 
+    const sourceRecord = createDefaultSourceEconomyRecord({
+      sourceId: source.id,
+      roomName: room.name,
+      classification: 'local',
+    });
+    sourceRecord.containerId = container.id;
+    sourceRecord.containerPosition = { x: 11, y: 10, roomName: 'W1N1' };
+    sourceRecord.roadAnchor = { x: 12, y: 10, roomName: 'W1N1' };
+
+    Memory.imperium.rooms[room.name] = {
+      roomName: room.name,
+      lastSeenTick: Game.time,
+      economy: {
+        ...createDefaultRoomEconomyRecord(room.name),
+        sourceRecords: {
+          [source.id]: sourceRecord,
+        },
+      },
+    };
+
     Game.rooms[room.name] = room;
+
+    summarizeRoomEconomySnapshot.mockReturnValue({
+      roomName: room.name,
+      controllerLevel: 2,
+      energyAvailable: 250,
+      energyCapacityAvailable: 550,
+      initialExtensionEnvelopeReady: false,
+      extensionBuildoutComplete: false,
+      hostileCount: 0,
+      localSourceIds: ['source-a'],
+      remoteSourceIds: [],
+    });
 
     createWorkerRoomProcess(room.name).run({ tick: Game.time, cpuUsed: 0 });
 
-    expect(room.createConstructionSite).toHaveBeenCalledTimes(5);
+    expect(Memory.imperium.rooms[room.name]?.economy.bootstrap.phase).toBe('extension-build');
+    const extensionPlacements = createConstructionSite.mock.calls.filter((call) => {
+      return call[2] === STRUCTURE_EXTENSION;
+    });
+
+    expect(extensionPlacements).toHaveLength(1);
+  });
+
+  it('clears slot claims and unmatched hauler reroutes when a rerouted shuttle dies', () => {
+    const roomName = 'W1N1';
+    const source = {
+      id: 'source-a',
+      pos: {
+        roomName,
+        x: 10,
+        y: 10,
+        getRangeTo: vi.fn().mockReturnValue(3),
+        findInRange: vi.fn().mockReturnValue([]),
+      },
+    } as unknown as Source;
+    const controller = {
+      id: 'controller-1',
+      level: 2,
+      my: true,
+      pos: { roomName, getRangeTo: vi.fn().mockReturnValue(3) },
+    } as unknown as StructureController;
+
+    Memory.imperium.rooms[roomName] = {
+      roomName,
+      lastSeenTick: Game.time - 1,
+      economy: {
+        ...createDefaultRoomEconomyRecord(roomName),
+        bootstrap: {
+          ...createDefaultRoomEconomyRecord(roomName).bootstrap,
+          sourceSlots: {
+            'source-a': {
+              '10,10': {
+                occupantCreepName: 'shuttle-1',
+                claimState: 'occupied',
+                reservedAtTick: Game.time - 5,
+              },
+            },
+          },
+          assignments: {
+            'shuttle-1': {
+              creepName: 'shuttle-1',
+              assignmentClass: 'shuttle',
+              sourceId: 'source-a' as Id<Source>,
+              slotKey: '10,10',
+              deliveryMode: 'rerouted',
+            },
+            'hauler-1': {
+              creepName: 'hauler-1',
+              assignmentClass: 'overflow-build-hauler',
+              sourceId: null,
+              slotKey: null,
+              deliveryMode: 'build',
+            },
+          },
+          fetchRequests: {
+            'hauler-1': {
+              creepName: 'hauler-1',
+              status: 'matched',
+              requestedAtTick: Game.time - 2,
+              assignedShuttleName: 'shuttle-1',
+            },
+          },
+          reroutes: {
+            'shuttle-1': {
+              shuttleName: 'shuttle-1',
+              targetHaulerName: 'hauler-1',
+              sourceId: 'source-a' as Id<Source>,
+            },
+          },
+        },
+      },
+    };
+
+    const room = {
+      name: roomName,
+      controller,
+      energyAvailable: 250,
+      energyCapacityAvailable: 550,
+      memory: {},
+      createConstructionSite: vi.fn().mockReturnValue(OK),
+      find: vi.fn().mockImplementation((findConstant: number) => {
+        switch (findConstant) {
+          case FIND_MY_CREEPS:
+            return [];
+          case FIND_SOURCES:
+            return [source];
+          case FIND_HOSTILE_CREEPS:
+            return [];
+          case FIND_MY_STRUCTURES:
+            return [];
+          case FIND_CONSTRUCTION_SITES:
+            return [];
+          default:
+            return [];
+        }
+      }),
+    } as unknown as Room;
+
+    Game.rooms[roomName] = room;
+
+    summarizeRoomEconomySnapshot.mockReturnValue({
+      roomName,
+      controllerLevel: 2,
+      energyAvailable: 250,
+      energyCapacityAvailable: 550,
+      initialExtensionEnvelopeReady: false,
+      extensionBuildoutComplete: false,
+      hostileCount: 0,
+      localSourceIds: ['source-a'],
+      remoteSourceIds: [],
+    });
+
+    createWorkerRoomProcess(roomName).run({ tick: Game.time, cpuUsed: 0 });
+
     expect(
-      room.createConstructionSite,
-    ).toHaveBeenNthCalledWith(1, expect.any(Number), expect.any(Number), STRUCTURE_EXTENSION);
+      Memory.imperium.rooms[roomName]?.economy.bootstrap.sourceSlots['source-a']?.['10,10']
+        ?.claimState,
+    ).toBe('open');
+    expect(Memory.imperium.rooms[roomName]?.economy.bootstrap.reroutes['shuttle-1']).toBeUndefined();
+    expect(Memory.imperium.rooms[roomName]?.economy.bootstrap.fetchRequests['hauler-1']).toMatchObject({
+      status: 'pending',
+      assignedShuttleName: null,
+    });
   });
 
   it('spawns a stationary miner for a local source after the initial extension envelope is ready', () => {

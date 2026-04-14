@@ -106,7 +106,7 @@ const getConstructionSites = (room: Room): ConstructionSite[] => {
 
 const getManagedCreeps = (room: Room): Creep[] => {
   const globalCreeps = Object.values(Game.creeps ?? {}).filter((creep) => {
-    const homeRoomName = creep.memory.homeRoomName ?? creep.room?.name;
+    const homeRoomName = creep.memory?.homeRoomName ?? creep.room?.name;
     return homeRoomName === room.name;
   });
 
@@ -836,17 +836,95 @@ const runControllerUpgrade = (
   }
 };
 
-const runBootstrapBuilder = (creep: Creep): void => {
-  if (moveToAssignedRoom(creep)) {
+const runBootstrapShuttle = (
+  creep: Creep,
+  room: Room,
+  roomMemory: RoomDomainMemory,
+): void => {
+  const assignment = roomMemory.economy.bootstrap.assignments[creep.name];
+
+  if (!assignment) {
     return;
   }
 
-  if (creep.store[RESOURCE_ENERGY] === 0) {
+  if (creep.store.getUsedCapacity(RESOURCE_ENERGY) === 0) {
+    assignment.deliveryMode = 'harvest';
     runHarvestFromAssignment(creep);
     return;
   }
 
-  runBuild(creep);
+  if (roomMemory.economy.bootstrap.phase === 'exit-charge') {
+    assignment.deliveryMode = 'charge';
+    const target = findTransferTarget(creep);
+
+    if (target) {
+      runTransfer(creep, { target });
+    }
+
+    return;
+  }
+
+  const reroute = roomMemory.economy.bootstrap.reroutes[creep.name];
+
+  if (reroute) {
+    assignment.deliveryMode = 'rerouted';
+    const hauler = Game.creeps[reroute.targetHaulerName];
+
+    if (hauler) {
+      if (creep.transfer(hauler, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
+        creep.moveTo(hauler);
+      }
+      return;
+    }
+  }
+
+  const activeSite = getConstructionSites(room).find((site) => {
+    return site.id === roomMemory.economy.bootstrap.activeExtensionSiteId;
+  });
+
+  if (roomMemory.economy.bootstrap.phase === 'extension-build' && activeSite) {
+    assignment.deliveryMode = 'build';
+    runBuild(creep, { target: activeSite });
+    return;
+  }
+
+  assignment.deliveryMode = 'deliver';
+  const target = findTransferTarget(creep);
+
+  if (target) {
+    runTransfer(creep, { target });
+  } else if (room.controller) {
+    runControllerUpgrade(creep, room.controller);
+  }
+};
+
+const runBootstrapBuilder = (creep: Creep, room: Room): void => {
+  if (moveToAssignedRoom(creep)) {
+    return;
+  }
+
+  if (creep.store.getUsedCapacity(RESOURCE_ENERGY) === 0) {
+    const dropped = room.find(FIND_DROPPED_RESOURCES).find((resource) => {
+      return resource.resourceType === RESOURCE_ENERGY;
+    });
+
+    if (dropped) {
+      const pickupResult = creep.pickup(dropped);
+
+      if (pickupResult === OK || pickupResult === ERR_NOT_IN_RANGE) {
+        return;
+      }
+    }
+
+    runWithdraw(creep);
+    return;
+  }
+
+  const site = getConstructionSites(room)[0];
+
+  if (site) {
+    runBuild(creep, { target: site });
+  }
 };
 
 const runStationaryMiner = (creep: Creep): void => {
@@ -1295,9 +1373,42 @@ export const createWorkerRoomProcess = (roomName: string): KernelProcess => {
       }
 
       for (const creep of creeps) {
+        const assignment = roomMemory.economy.bootstrap.assignments[creep.name];
+
+        if (assignment?.assignmentClass === 'shuttle') {
+          runBootstrapShuttle(creep, room, roomMemory);
+          continue;
+        }
+
+        if (assignment?.assignmentClass === 'bootstrap-builder') {
+          runBootstrapBuilder(creep, room);
+          continue;
+        }
+
+        if (assignment?.assignmentClass === 'overflow-build-hauler') {
+          if (creep.store.getUsedCapacity(RESOURCE_ENERGY) === 0) {
+            roomMemory.economy.bootstrap.fetchRequests[creep.name] ??= {
+              creepName: creep.name,
+              status: 'pending',
+              requestedAtTick: Game.time,
+              assignedShuttleName: null,
+            };
+            continue;
+          }
+
+          const activeSite = getConstructionSites(room).find((site) => {
+            return site.id === roomMemory.economy.bootstrap.activeExtensionSiteId;
+          });
+
+          if (activeSite) {
+            runBuild(creep, { target: activeSite });
+          }
+          continue;
+        }
+
         switch (creep.memory.role) {
           case 'bootstrapBuilder':
-            runBootstrapBuilder(creep);
+            runBootstrapBuilder(creep, room);
             break;
           case 'stationaryMiner':
             runStationaryMiner(creep);

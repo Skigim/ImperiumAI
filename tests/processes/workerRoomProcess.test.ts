@@ -46,6 +46,7 @@ Object.assign(globalThis, {
   FIND_SOURCES: 105,
   FIND_STRUCTURES: 106,
   FIND_CONSTRUCTION_SITES: 107,
+  FIND_DROPPED_RESOURCES: 108,
   RESOURCE_ENERGY: 'energy',
   STRUCTURE_CONTAINER: 'container',
   STRUCTURE_EXTENSION: 'extension',
@@ -1148,6 +1149,271 @@ describe('worker room process', () => {
       status: 'matched',
       assignedShuttleName: 'shuttle-1',
     });
+  });
+
+  it('lets shuttles build directly in extension-build when no overflow fetch request is active', () => {
+    const creep = {
+      name: 'shuttle-1',
+      memory: {
+        role: 'worker',
+        assignedSourceId: 'source-a' as Id<Source>,
+        bootstrapAssignmentClass: 'shuttle',
+        bootstrapSlotKey: '10,10',
+        bootstrapDeliveryMode: 'deliver',
+      },
+      store: createEnergyStore(50, 0),
+      pos: { getRangeTo: vi.fn().mockReturnValue(1), roomName: 'W1N1' },
+      moveTo: vi.fn(),
+      transfer: vi.fn(),
+      build: vi.fn().mockReturnValue(OK),
+      upgradeController: vi.fn().mockReturnValue(OK),
+    } as unknown as Creep;
+
+    const site = {
+      id: 'site-1',
+      structureType: STRUCTURE_EXTENSION,
+      pos: { roomName: 'W1N1', x: 24, y: 24 },
+    } as unknown as ConstructionSite<BuildableStructureConstant>;
+
+    const room = {
+      name: 'W1N1',
+      controller: { level: 2, my: true } as StructureController,
+      energyAvailable: 200,
+      energyCapacityAvailable: 550,
+      memory: {},
+      createConstructionSite: vi.fn().mockReturnValue(OK),
+      find: vi.fn().mockImplementation((findConstant: number) => {
+        switch (findConstant) {
+          case FIND_MY_CREEPS:
+            return [creep];
+          case FIND_CONSTRUCTION_SITES:
+            return [site];
+          case FIND_HOSTILE_CREEPS:
+            return [];
+          case FIND_SOURCES:
+            return [];
+          case FIND_MY_STRUCTURES:
+            return [];
+          default:
+            return [];
+        }
+      }),
+    } as unknown as Room;
+
+    Game.rooms[room.name] = room;
+    Memory.imperium.rooms[room.name] = {
+      roomName: room.name,
+      lastSeenTick: Game.time,
+      economy: {
+        ...createDefaultRoomEconomyRecord(room.name),
+        bootstrap: {
+          ...createDefaultRoomEconomyRecord(room.name).bootstrap,
+          phase: 'extension-build',
+          activeExtensionSiteId: site.id,
+          assignments: {
+            [creep.name]: {
+              creepName: creep.name,
+              assignmentClass: 'shuttle',
+              sourceId: 'source-a' as Id<Source>,
+              slotKey: '10,10',
+              deliveryMode: 'deliver',
+            },
+          },
+        },
+      },
+    };
+
+    summarizeRoomEconomySnapshot.mockReturnValue({
+      roomName: room.name,
+      controllerLevel: 2,
+      energyAvailable: 200,
+      energyCapacityAvailable: 550,
+      initialExtensionEnvelopeReady: false,
+      extensionBuildoutComplete: false,
+      hostileCount: 0,
+      localSourceIds: [],
+      remoteSourceIds: [],
+    });
+
+    createWorkerRoomProcess(room.name).run({ tick: Game.time, cpuUsed: 0 });
+
+    expect(runBuild).toHaveBeenCalledWith(creep, { target: site });
+  });
+
+  it('preempts spawn delivery immediately once a shuttle is rerouted to a hauler', () => {
+    const shuttle = {
+      name: 'shuttle-1',
+      memory: { role: 'worker' },
+      store: createEnergyStore(50, 0),
+      pos: { getRangeTo: vi.fn().mockReturnValue(2), roomName: 'W1N1' },
+      moveTo: vi.fn(),
+      transfer: vi.fn().mockReturnValue(ERR_NOT_IN_RANGE),
+      upgradeController: vi.fn(),
+    } as unknown as Creep;
+    const hauler = {
+      name: 'hauler-1',
+      pos: { roomName: 'W1N1', x: 20, y: 20 },
+    } as unknown as Creep;
+
+    Game.creeps[hauler.name] = hauler;
+
+    const room = {
+      name: 'W1N1',
+      controller: { level: 2, my: true } as StructureController,
+      energyAvailable: 200,
+      energyCapacityAvailable: 550,
+      memory: {},
+      createConstructionSite: vi.fn().mockReturnValue(OK),
+      find: vi.fn().mockImplementation((findConstant: number) => {
+        switch (findConstant) {
+          case FIND_MY_CREEPS:
+            return [shuttle];
+          case FIND_CONSTRUCTION_SITES:
+            return [];
+          case FIND_HOSTILE_CREEPS:
+            return [];
+          case FIND_SOURCES:
+            return [];
+          case FIND_MY_STRUCTURES:
+            return [];
+          default:
+            return [];
+        }
+      }),
+    } as unknown as Room;
+
+    Game.rooms[room.name] = room;
+    Memory.imperium.rooms[room.name] = {
+      roomName: room.name,
+      lastSeenTick: Game.time,
+      economy: {
+        ...createDefaultRoomEconomyRecord(room.name),
+        bootstrap: {
+          ...createDefaultRoomEconomyRecord(room.name).bootstrap,
+          phase: 'extension-build',
+          assignments: {
+            [shuttle.name]: {
+              creepName: shuttle.name,
+              assignmentClass: 'shuttle',
+              sourceId: 'source-a' as Id<Source>,
+              slotKey: '10,10',
+              deliveryMode: 'rerouted',
+            },
+          },
+          reroutes: {
+            [shuttle.name]: {
+              shuttleName: shuttle.name,
+              targetHaulerName: hauler.name,
+              sourceId: 'source-a' as Id<Source>,
+            },
+          },
+        },
+      },
+    };
+
+    summarizeRoomEconomySnapshot.mockReturnValue({
+      roomName: room.name,
+      controllerLevel: 2,
+      energyAvailable: 200,
+      energyCapacityAvailable: 550,
+      initialExtensionEnvelopeReady: false,
+      extensionBuildoutComplete: false,
+      hostileCount: 0,
+      localSourceIds: [],
+      remoteSourceIds: [],
+    });
+
+    createWorkerRoomProcess(room.name).run({ tick: Game.time, cpuUsed: 0 });
+
+    expect(shuttle.transfer).toHaveBeenCalledWith(hauler, RESOURCE_ENERGY);
+    expect(shuttle.upgradeController).not.toHaveBeenCalled();
+  });
+
+  it('makes bootstrap builders pick up dropped energy before a source container exists', () => {
+    const droppedEnergy = {
+      id: 'drop-1',
+      amount: 50,
+      resourceType: RESOURCE_ENERGY,
+      pos: { roomName: 'W1N1', x: 10, y: 10 },
+    } as unknown as Resource<ResourceConstant>;
+    const builder = {
+      name: 'builder-1',
+      memory: {
+        role: 'bootstrapBuilder',
+        assignedSourceId: 'source-a' as Id<Source>,
+        bootstrapAssignmentClass: 'bootstrap-builder',
+      },
+      store: createEnergyStore(0, 50),
+      pos: { getRangeTo: vi.fn().mockReturnValue(1), roomName: 'W1N1' },
+      moveTo: vi.fn(),
+      pickup: vi.fn().mockReturnValue(OK),
+      upgradeController: vi.fn().mockReturnValue(OK),
+    } as unknown as Creep;
+
+    const room = {
+      name: 'W1N1',
+      controller: { level: 2, my: true } as StructureController,
+      energyAvailable: 100,
+      energyCapacityAvailable: 550,
+      memory: {},
+      createConstructionSite: vi.fn().mockReturnValue(OK),
+      find: vi.fn().mockImplementation((findConstant: number) => {
+        switch (findConstant) {
+          case FIND_MY_CREEPS:
+            return [builder];
+          case FIND_DROPPED_RESOURCES:
+            return [droppedEnergy];
+          case FIND_HOSTILE_CREEPS:
+            return [];
+          case FIND_SOURCES:
+            return [];
+          case FIND_MY_STRUCTURES:
+            return [];
+          case FIND_CONSTRUCTION_SITES:
+            return [];
+          default:
+            return [];
+        }
+      }),
+    } as unknown as Room;
+
+    Game.rooms[room.name] = room;
+    Memory.imperium.rooms[room.name] = {
+      roomName: room.name,
+      lastSeenTick: Game.time,
+      economy: {
+        ...createDefaultRoomEconomyRecord(room.name),
+        bootstrap: {
+          ...createDefaultRoomEconomyRecord(room.name).bootstrap,
+          phase: 'stationary-transition',
+          assignments: {
+            [builder.name]: {
+              creepName: builder.name,
+              assignmentClass: 'bootstrap-builder',
+              sourceId: 'source-a' as Id<Source>,
+              slotKey: null,
+              deliveryMode: 'build',
+            },
+          },
+        },
+      },
+    };
+
+    summarizeRoomEconomySnapshot.mockReturnValue({
+      roomName: room.name,
+      controllerLevel: 2,
+      energyAvailable: 100,
+      energyCapacityAvailable: 550,
+      initialExtensionEnvelopeReady: true,
+      extensionBuildoutComplete: true,
+      hostileCount: 0,
+      localSourceIds: [],
+      remoteSourceIds: [],
+    });
+
+    createWorkerRoomProcess(room.name).run({ tick: Game.time, cpuUsed: 0 });
+
+    expect(builder.pickup).toHaveBeenCalledWith(droppedEnergy);
   });
 
   it('spawns a stationary miner for a local source after the initial extension envelope is ready', () => {

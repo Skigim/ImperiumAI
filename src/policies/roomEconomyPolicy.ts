@@ -53,6 +53,7 @@ export const chooseBootstrapShuttleSource = (input: {
   sourceSlots: BootstrapState['sourceSlots'];
 }): Id<Source> | null => {
   const counts = new Map<Id<Source>, number>();
+  const representedReservedClaims = new Set<string>();
 
   for (const sourceId of input.localSourceIds) {
     counts.set(sourceId, 0);
@@ -68,6 +69,10 @@ export const chooseBootstrapShuttleSource = (input: {
     }
 
     counts.set(assignment.sourceId, (counts.get(assignment.sourceId) ?? 0) + 1);
+
+    if (assignment.slotKey !== null) {
+      representedReservedClaims.add(`${assignment.sourceId}:${assignment.slotKey}:${assignment.creepName}`);
+    }
   }
 
   for (const [sourceId, slotMap] of Object.entries(input.sourceSlots)) {
@@ -77,8 +82,16 @@ export const chooseBootstrapShuttleSource = (input: {
       continue;
     }
 
-    for (const slot of Object.values(slotMap)) {
+    for (const [slotKey, slot] of Object.entries(slotMap)) {
       if (slot.claimState !== 'reserved') {
+        continue;
+      }
+
+      if (
+        representedReservedClaims.has(
+          `${typedSourceId}:${slotKey}:${slot.occupantCreepName ?? ''}`,
+        )
+      ) {
         continue;
       }
 
@@ -87,6 +100,11 @@ export const chooseBootstrapShuttleSource = (input: {
   }
 
   return [...counts.entries()]
+    .filter(([sourceId]) => {
+      return Object.values(input.sourceSlots[sourceId] ?? {}).some((slot) => {
+        return slot.claimState === 'open';
+      });
+    })
     .sort((left, right) => {
       if (left[1] !== right[1]) {
         return left[1] - right[1];
@@ -126,7 +144,11 @@ export const classifyBootstrapSpawn = (input: {
     return 'stationary-miner';
   }
 
-  if (input.phase === 'bootstrap-shuttle' || input.phase === 'extension-build') {
+  if (
+    input.phase === 'bootstrap-shuttle' ||
+    input.phase === 'extension-build' ||
+    input.phase === 'exit-charge'
+  ) {
     return input.openSlotCount > 0 ? 'shuttle' : 'overflow-build-hauler';
   }
 

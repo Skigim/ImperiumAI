@@ -81,7 +81,7 @@ describe('room economy policy', () => {
     ).toBe('complete');
   });
 
-  it('chooses the least-staffed shuttle source while counting assignments and reserved slots', () => {
+  it('chooses the least-staffed shuttle source with an open slot while counting assignments and reserved slots', () => {
     expect(
       chooseBootstrapShuttleSource({
         localSourceIds: ['source-a' as Id<Source>, 'source-b' as Id<Source>],
@@ -109,6 +109,49 @@ describe('room economy policy', () => {
               reservedAtTick: 2,
             },
             '21,20': {
+              occupantCreepName: null,
+              claimState: 'open',
+              reservedAtTick: 0,
+            },
+          },
+        },
+      }),
+    ).toBe('source-b');
+  });
+
+  it('does not double count a pending shuttle assignment that already holds the reserved slot', () => {
+    expect(
+      chooseBootstrapShuttleSource({
+        localSourceIds: ['source-a' as Id<Source>, 'source-b' as Id<Source>],
+        assignments: {
+          pendingShuttle: {
+            creepName: 'bootstrap-pending',
+            assignmentClass: 'shuttle',
+            sourceId: 'source-a' as Id<Source>,
+            slotKey: '10,10',
+            deliveryMode: 'harvest',
+          },
+        },
+        sourceSlots: {
+          'source-a': {
+            '10,10': {
+              occupantCreepName: 'bootstrap-pending',
+              claimState: 'reserved',
+              reservedAtTick: 2,
+            },
+            '10,11': {
+              occupantCreepName: null,
+              claimState: 'open',
+              reservedAtTick: 0,
+            },
+          },
+          'source-b': {
+            '20,20': {
+              occupantCreepName: null,
+              claimState: 'reserved',
+              reservedAtTick: 3,
+            },
+            '20,21': {
               occupantCreepName: null,
               claimState: 'open',
               reservedAtTick: 0,
@@ -191,13 +234,19 @@ describe('room economy policy', () => {
     ).toBe('stationary-miner');
   });
 
-  it('returns no bootstrap spawn classification during exit-charge', () => {
+  it('classifies exit-charge respawns using the same slot-aware split as late bootstrap', () => {
     expect(
       classifyBootstrapSpawn({
         phase: 'exit-charge',
         openSlotCount: 2,
       }),
-    ).toBeNull();
+    ).toBe('shuttle');
+    expect(
+      classifyBootstrapSpawn({
+        phase: 'exit-charge',
+        openSlotCount: 0,
+      }),
+    ).toBe('overflow-build-hauler');
   });
 
   it('returns no bootstrap spawn classification once bootstrap is complete', () => {

@@ -8,6 +8,7 @@ import {
   createDefaultRoomEconomyRecord,
   createDefaultSourceEconomyRecord,
 } from '../model/roomEconomy';
+import type { BootstrapDeliveryMode } from '../model/roomEconomy';
 import type { PersistedRoomPosition, SourceEconomyRecord } from '../model/roomEconomy';
 import {
   advanceSourceState,
@@ -30,12 +31,14 @@ const STRUCTURAL_REVIEW_INTERVAL = 10;
 const REMOTE_DISTANCE_BASE = 25;
 const REMOTE_LINEAR_ROOM_MULTIPLIER = 50;
 const REPAIR_THRESHOLD = 25;
+const BOOTSTRAP_SHUTTLE_CAP = 4;
 const GENERALIST_BODY: BodyPartConstant[] = ['work', 'carry', 'move'];
 const BOOTSTRAP_SHUTTLE_BODY: BodyPartConstant[] = ['work', 'carry', 'move', 'move'];
 const BUILDER_BODY: BodyPartConstant[] = ['work', 'carry', 'move'];
 const SCOUT_BODY: BodyPartConstant[] = ['move'];
 const ROUTE_HAULER_BODY: BodyPartConstant[] = ['work', 'carry', 'carry', 'move'];
 const STATIONARY_MINER_BODY: BodyPartConstant[] = ['work', 'work', 'work', 'work', 'work', 'move'];
+const STATIONARY_MINER_COST = 550;
 const INITIAL_EXTENSION_LAYOUT: Array<readonly [number, number]> = [
   [-1, -1],
   [0, -1],
@@ -49,6 +52,62 @@ const INITIAL_EXTENSION_LAYOUT: Array<readonly [number, number]> = [
   [2, 0],
 ];
 const TOWER_LAYOUT: Array<readonly [number, number]> = [[0, 2]];
+const PENDING_EXTENSION_SITE_ID =
+  '__pending_extension_site__' as Id<ConstructionSite<BuildableStructureConstant>>;
+const bootstrapSlotTopologyCache = new WeakMap<object, Map<string, string[]>>();
+
+const getBootstrapSlotTopologyCacheKey = (room: Room, source: Source): string | null => {
+  if (typeof source.pos.x !== 'number' || typeof source.pos.y !== 'number') {
+    return null;
+  }
+
+  return `${room.name}:${source.id}:${source.pos.x},${source.pos.y}`;
+};
+
+const getExpectedBootstrapSlotKeys = (room: Room, source: Source): string[] => {
+  const cacheKey = getBootstrapSlotTopologyCacheKey(room, source);
+  const terrain = typeof room.getTerrain === 'function' ? room.getTerrain() : null;
+
+  if (cacheKey && terrain) {
+    const terrainCache = bootstrapSlotTopologyCache.get(terrain as object);
+    const cached = terrainCache?.get(cacheKey);
+
+    if (cached) {
+      return cached;
+    }
+  }
+
+  if (typeof source.pos.x !== 'number' || typeof source.pos.y !== 'number') {
+    return [];
+  }
+
+  const slotKeys: string[] = [];
+
+  for (let dx = -1; dx <= 1; dx += 1) {
+    for (let dy = -1; dy <= 1; dy += 1) {
+      if (dx === 0 && dy === 0) {
+        continue;
+      }
+
+      const x = source.pos.x + dx;
+      const y = source.pos.y + dy;
+
+      if (!isInBounds(x, y) || (terrain !== null && terrain.get(x, y) === TERRAIN_MASK_WALL)) {
+        continue;
+      }
+
+      slotKeys.push(`${x},${y}`);
+    }
+  }
+
+  if (cacheKey && terrain) {
+    const terrainCache = bootstrapSlotTopologyCache.get(terrain as object) ?? new Map<string, string[]>();
+    terrainCache.set(cacheKey, slotKeys);
+    bootstrapSlotTopologyCache.set(terrain as object, terrainCache);
+  }
+
+  return slotKeys;
+};
 
 const toPersistedRoomPosition = (
   position: RoomPosition | { x?: number; y?: number; roomName?: string } | null,
@@ -67,6 +126,56 @@ const toPersistedRoomPosition = (
   }
 
   return null;
+};
+
+const parsePersistedRoomPosition = (
+  positionKey: string | null,
+  roomName: string,
+): PersistedRoomPosition | null => {
+  if (positionKey === null) {
+    return null;
+  }
+
+  const [xValue, yValue] = positionKey.split(',');
+  const x = Number(xValue);
+  const y = Number(yValue);
+
+  if (!Number.isInteger(x) || !Number.isInteger(y) || !isInBounds(x, y)) {
+    return null;
+  }
+
+  return { x, y, roomName };
+};
+
+const isOnPersistedRoomPosition = (
+  creep: Creep,
+  position: PersistedRoomPosition,
+): boolean => {
+  const currentRoomName = creep.room?.name ?? creep.pos?.roomName;
+
+  return currentRoomName === position.roomName && creep.pos?.x === position.x && creep.pos?.y === position.y;
+};
+
+const moveToPersistedRoomPosition = (
+  creep: Creep,
+  position: PersistedRoomPosition | null,
+): boolean => {
+  if (!position) {
+    return false;
+  }
+
+  if (isOnPersistedRoomPosition(creep, position)) {
+    return false;
+  }
+
+  const currentRoomName = creep.room?.name ?? creep.pos?.roomName;
+
+  if (currentRoomName !== position.roomName) {
+    return false;
+  }
+
+  creep.moveTo(position.x, position.y);
+  return true;
 };
 
 const getNearbySourceInfrastructure = (
@@ -467,6 +576,7 @@ const ensureSourceInfrastructureSites = (
 ): SourceEconomyRecord => {
   const sourceRoom = Game.rooms[source.pos.roomName] ?? room;
   const constructionSites = getConstructionSites(sourceRoom);
+  const { container } = getNearbySourceInfrastructure(source);
   let nextRecord = { ...sourceRecord };
 
   if (!nextRecord.designatedMiningTile) {
@@ -475,6 +585,7 @@ const ensureSourceInfrastructureSites = (
 
   if (
     nextRecord.designatedMiningTile &&
+    !container &&
     !nextRecord.containerId &&
     !constructionSites.some((site) => {
       return (
@@ -496,6 +607,7 @@ const ensureSourceInfrastructureSites = (
     nextRecord.roadAnchor ?? chooseAdjacentTile(sourceRoom, source, nextRecord.designatedMiningTile);
 
   if (
+    (container !== null || nextRecord.containerId !== null) &&
     roadAnchor &&
     !constructionSites.some((site) => {
       return (
@@ -514,6 +626,88 @@ const ensureSourceInfrastructureSites = (
   }
 
   return nextRecord;
+};
+
+const positionsMatch = (
+  position: { x?: number; y?: number; roomName?: string } | null | undefined,
+  target: PersistedRoomPosition | null | undefined,
+): boolean => {
+  return (
+    target !== null &&
+    target !== undefined &&
+    typeof position?.x === 'number' &&
+    typeof position?.y === 'number' &&
+    typeof position?.roomName === 'string' &&
+    position.x === target.x &&
+    position.y === target.y &&
+    position.roomName === target.roomName
+  );
+};
+
+const isPositionNearSource = (
+  source: Source,
+  position: { x?: number; y?: number; roomName?: string } | null | undefined,
+): boolean => {
+  if (
+    !position ||
+    typeof position.x !== 'number' ||
+    typeof position.y !== 'number' ||
+    typeof position.roomName !== 'string' ||
+    position.roomName !== source.pos.roomName
+  ) {
+    return false;
+  }
+
+  if (typeof source.pos.getRangeTo === 'function') {
+    return source.pos.getRangeTo(position as RoomPosition) <= 1;
+  }
+
+  if (typeof source.pos.x === 'number' && typeof source.pos.y === 'number') {
+    return Math.max(Math.abs(source.pos.x - position.x), Math.abs(source.pos.y - position.y)) <= 1;
+  }
+
+  return false;
+};
+
+const getAssignedSourceDroppedEnergy = (
+  room: Room,
+  source: Source | null,
+): Resource<ResourceConstant> | null => {
+  if (!source) {
+    return null;
+  }
+
+  return (room.find(FIND_DROPPED_RESOURCES) as Resource<ResourceConstant>[]).find((resource) => {
+    return resource.resourceType === RESOURCE_ENERGY && isPositionNearSource(source, resource.pos);
+  }) ?? null;
+};
+
+const getAssignedSourceConstructionSite = (
+  room: Room,
+  source: Source | null,
+  sourceRecord: SourceEconomyRecord | null,
+): ConstructionSite<BuildableStructureConstant> | null => {
+  const constructionSites = getConstructionSites(room) as ConstructionSite<BuildableStructureConstant>[];
+  const containerTarget = sourceRecord?.designatedMiningTile ?? sourceRecord?.containerPosition ?? null;
+  const containerSite = constructionSites.find((site) => {
+    return (
+      site.structureType === STRUCTURE_CONTAINER &&
+      (positionsMatch(site.pos, containerTarget) ||
+        (source !== null && isPositionNearSource(source, site.pos)))
+    );
+  });
+
+  if (containerSite) {
+    return containerSite;
+  }
+
+  return constructionSites.find((site) => {
+    return (
+      site.structureType === STRUCTURE_ROAD &&
+      (positionsMatch(site.pos, sourceRecord?.roadAnchor ?? null) ||
+        (source !== null && isPositionNearSource(source, site.pos)))
+    );
+  }) ?? null;
 };
 
 const syncSourceAssignments = (
@@ -554,12 +748,156 @@ const syncSourceAssignments = (
   }
 };
 
+const getBootstrapSlotMapFromRoom = (
+  room: Room,
+  source: Source,
+  existingSlotMap: RoomDomainMemory['economy']['bootstrap']['sourceSlots'][string],
+): RoomDomainMemory['economy']['bootstrap']['sourceSlots'][string] => {
+  if (typeof source.pos.x !== 'number' || typeof source.pos.y !== 'number') {
+    return existingSlotMap;
+  }
+
+  const slotMap: RoomDomainMemory['economy']['bootstrap']['sourceSlots'][string] = {};
+
+  for (const slotKey of getExpectedBootstrapSlotKeys(room, source)) {
+      slotMap[slotKey] = existingSlotMap[slotKey] ?? {
+        occupantCreepName: null,
+        claimState: 'open',
+        reservedAtTick: 0,
+      };
+  }
+
+  return slotMap;
+};
+
+const bootstrapSlotMapNeedsRefresh = (
+  room: Room,
+  source: Source,
+  slotMap: RoomDomainMemory['economy']['bootstrap']['sourceSlots'][string],
+): boolean => {
+  const slotKeys = Object.keys(slotMap);
+
+  if (slotKeys.length === 0 || typeof source.pos.x !== 'number' || typeof source.pos.y !== 'number') {
+    return true;
+  }
+
+  const expectedSlotKeys = new Set(getExpectedBootstrapSlotKeys(room, source));
+
+  if (slotKeys.length !== expectedSlotKeys.size) {
+    return true;
+  }
+
+  return slotKeys.some((slotKey) => !expectedSlotKeys.has(slotKey));
+};
+
 const ensureBootstrapSourceSlots = (
   roomMemory: RoomDomainMemory,
+  room: Room,
   localSources: readonly Source[],
 ): void => {
   for (const source of localSources) {
-    roomMemory.economy.bootstrap.sourceSlots[source.id] ??= {};
+    const existingSlotMap = roomMemory.economy.bootstrap.sourceSlots[source.id] ?? {};
+
+    if (bootstrapSlotMapNeedsRefresh(room, source, existingSlotMap)) {
+      roomMemory.economy.bootstrap.sourceSlots[source.id] = getBootstrapSlotMapFromRoom(
+        room,
+        source,
+        existingSlotMap,
+      );
+    } else {
+      roomMemory.economy.bootstrap.sourceSlots[source.id] = existingSlotMap;
+    }
+  }
+};
+
+const syncBootstrapAssignmentsFromCreeps = (
+  roomMemory: RoomDomainMemory,
+  creeps: readonly Creep[],
+): void => {
+  for (const creep of creeps) {
+    const assignmentClass = creep.memory.bootstrapAssignmentClass;
+
+    if (!assignmentClass) {
+      continue;
+    }
+
+    const existingAssignment = roomMemory.economy.bootstrap.assignments[creep.name];
+    const sourceId = creep.memory.assignedSourceId ?? null;
+    let slotKey = creep.memory.bootstrapSlotKey ?? null;
+
+    if (
+      assignmentClass === 'shuttle' &&
+      existingAssignment?.assignmentClass === 'shuttle' &&
+      existingAssignment.sourceId !== null &&
+      existingAssignment.slotKey !== null &&
+      existingAssignment.sourceId === sourceId &&
+      existingAssignment.slotKey !== slotKey
+    ) {
+      const repairedSlot =
+        roomMemory.economy.bootstrap.sourceSlots[existingAssignment.sourceId]?.[
+          existingAssignment.slotKey
+        ];
+      const staleSlot = slotKey
+        ? roomMemory.economy.bootstrap.sourceSlots[sourceId]?.[slotKey]
+        : null;
+
+      if (repairedSlot?.occupantCreepName === creep.name && !staleSlot) {
+        slotKey = existingAssignment.slotKey;
+        creep.memory.bootstrapSlotKey = slotKey;
+      }
+    }
+
+    if (
+      assignmentClass === 'shuttle' &&
+      sourceId !== null &&
+      slotKey !== null &&
+      !roomMemory.economy.bootstrap.sourceSlots[sourceId]?.[slotKey]
+    ) {
+      const repairedSlotKey = reserveBootstrapSlot(roomMemory, sourceId, creep.name);
+
+      if (repairedSlotKey) {
+        slotKey = repairedSlotKey;
+        creep.memory.bootstrapSlotKey = repairedSlotKey;
+      }
+    }
+
+    if (
+      existingAssignment?.assignmentClass === 'shuttle' &&
+      existingAssignment.sourceId &&
+      existingAssignment.slotKey &&
+      (existingAssignment.sourceId !== sourceId || existingAssignment.slotKey !== slotKey)
+    ) {
+      const previousSlot =
+        roomMemory.economy.bootstrap.sourceSlots[existingAssignment.sourceId]?.[
+          existingAssignment.slotKey
+        ];
+
+      if (previousSlot?.occupantCreepName === creep.name) {
+        previousSlot.occupantCreepName = null;
+        previousSlot.claimState = 'open';
+        previousSlot.reservedAtTick = 0;
+      }
+    }
+
+    roomMemory.economy.bootstrap.assignments[creep.name] = {
+      creepName: creep.name,
+      assignmentClass,
+      sourceId,
+      slotKey,
+      deliveryMode:
+        existingAssignment?.deliveryMode ??
+        creep.memory.bootstrapDeliveryMode ??
+        (assignmentClass === 'overflow-build-hauler' ? 'build' : 'harvest'),
+    };
+
+    if (assignmentClass === 'shuttle' && sourceId && slotKey) {
+      const slot = roomMemory.economy.bootstrap.sourceSlots[sourceId]?.[slotKey];
+
+      if (slot) {
+        slot.occupantCreepName = creep.name;
+        slot.claimState = 'occupied';
+      }
+    }
   }
 };
 
@@ -600,6 +938,22 @@ const cleanupDeadBootstrapAssignments = (
       }
     }
 
+    if (roomMemory.economy.bootstrap.fetchRequests[creepName]) {
+      delete roomMemory.economy.bootstrap.fetchRequests[creepName];
+    }
+
+    for (const [shuttleName, reroute] of Object.entries(roomMemory.economy.bootstrap.reroutes)) {
+      if (reroute.targetHaulerName === creepName) {
+        const shuttleAssignment = roomMemory.economy.bootstrap.assignments[shuttleName];
+
+        if (shuttleAssignment?.assignmentClass === 'shuttle') {
+          shuttleAssignment.deliveryMode = 'deliver';
+        }
+
+        delete roomMemory.economy.bootstrap.reroutes[shuttleName];
+      }
+    }
+
     delete roomMemory.economy.bootstrap.reroutes[creepName];
     delete roomMemory.economy.bootstrap.assignments[creepName];
   }
@@ -609,10 +963,7 @@ const ensureSingleBootstrapExtensionSite = (
   room: Room,
   roomMemory: RoomDomainMemory,
 ): void => {
-  if (
-    roomMemory.economy.bootstrap.phase !== 'extension-build' ||
-    room.energyCapacityAvailable < 550
-  ) {
+  if (roomMemory.economy.bootstrap.phase !== 'extension-build') {
     roomMemory.economy.bootstrap.activeExtensionSiteId = null;
     return;
   }
@@ -626,7 +977,10 @@ const ensureSingleBootstrapExtensionSite = (
     return;
   }
 
-  if (roomMemory.economy.bootstrap.lastExtensionPlacementTick === Game.time) {
+  if (
+    roomMemory.economy.bootstrap.activeExtensionSiteId === PENDING_EXTENSION_SITE_ID &&
+    Game.time - roomMemory.economy.bootstrap.lastExtensionPlacementTick <= 1
+  ) {
     return;
   }
 
@@ -637,6 +991,7 @@ const ensureSingleBootstrapExtensionSite = (
   }
 
   placeLayoutSites(room, spawn.pos, INITIAL_EXTENSION_LAYOUT, STRUCTURE_EXTENSION, 1);
+  roomMemory.economy.bootstrap.activeExtensionSiteId = PENDING_EXTENSION_SITE_ID;
   roomMemory.economy.bootstrap.lastExtensionPlacementTick = Game.time;
 };
 
@@ -646,6 +1001,219 @@ const countOpenBootstrapSlots = (
   return Object.values(sourceSlots).reduce((sum, slotMap) => {
     return sum + Object.values(slotMap).filter((slot) => slot.claimState === 'open').length;
   }, 0);
+};
+
+const countBootstrapAssignmentsByClass = (
+  assignments: RoomDomainMemory['economy']['bootstrap']['assignments'],
+  assignmentClass: RoomDomainMemory['economy']['bootstrap']['assignments'][string]['assignmentClass'],
+): number => {
+  return Object.values(assignments).filter((assignment) => {
+    return assignment.assignmentClass === assignmentClass;
+  }).length;
+};
+
+const chooseStationaryTransitionBuilderSource = (input: {
+  localSourceIds: readonly Id<Source>[];
+  assignments: RoomDomainMemory['economy']['bootstrap']['assignments'];
+}): Id<Source> | null => {
+  const counts = new Map<Id<Source>, number>();
+
+  for (const sourceId of input.localSourceIds) {
+    counts.set(sourceId, 0);
+  }
+
+  for (const assignment of Object.values(input.assignments)) {
+    if (assignment.assignmentClass !== 'bootstrap-builder' || assignment.sourceId === null) {
+      continue;
+    }
+
+    if (!counts.has(assignment.sourceId)) {
+      continue;
+    }
+
+    counts.set(assignment.sourceId, (counts.get(assignment.sourceId) ?? 0) + 1);
+  }
+
+  return [...counts.entries()]
+    .sort((left, right) => {
+      if (left[1] !== right[1]) {
+        return left[1] - right[1];
+      }
+
+      return left[0].localeCompare(right[0]);
+    })[0]?.[0] ?? null;
+};
+
+const handoffLegacyBootstrapWorkersToStationaryBuilders = (input: {
+  roomMemory: RoomDomainMemory;
+  creeps: readonly Creep[];
+  localSourceIds: readonly Id<Source>[];
+  roomName: string;
+}): void => {
+  for (const creep of input.creeps) {
+    const assignment = input.roomMemory.economy.bootstrap.assignments[creep.name];
+    const assignmentClass = assignment?.assignmentClass ?? creep.memory.bootstrapAssignmentClass;
+
+    if (assignmentClass !== 'shuttle' && assignmentClass !== 'overflow-build-hauler') {
+      continue;
+    }
+
+    const builderSourceId = chooseStationaryTransitionBuilderSource({
+      localSourceIds: input.localSourceIds,
+      assignments: input.roomMemory.economy.bootstrap.assignments,
+    });
+
+    if (!builderSourceId) {
+      continue;
+    }
+
+    const previousSourceId = assignment?.sourceId ?? creep.memory.assignedSourceId ?? null;
+    const previousSlotKey = assignment?.slotKey ?? creep.memory.bootstrapSlotKey ?? null;
+
+    if (assignmentClass === 'shuttle' && previousSourceId && previousSlotKey) {
+      const previousSlot =
+        input.roomMemory.economy.bootstrap.sourceSlots[previousSourceId]?.[previousSlotKey];
+
+      if (previousSlot?.occupantCreepName === creep.name) {
+        previousSlot.occupantCreepName = null;
+        previousSlot.claimState = 'open';
+        previousSlot.reservedAtTick = 0;
+      }
+    }
+
+    creep.memory.role = 'bootstrapBuilder';
+    creep.memory.assignedSourceId = builderSourceId;
+    creep.memory.assignedRoomName = input.roomName;
+    creep.memory.homeRoomName = input.roomName;
+    creep.memory.bootstrapAssignmentClass = 'bootstrap-builder';
+    creep.memory.bootstrapDeliveryMode = 'build';
+    delete creep.memory.bootstrapSlotKey;
+
+    input.roomMemory.economy.bootstrap.assignments[creep.name] = {
+      creepName: creep.name,
+      assignmentClass: 'bootstrap-builder',
+      sourceId: builderSourceId,
+      slotKey: null,
+      deliveryMode: 'build',
+    };
+  }
+};
+
+const hasStaffedStationaryMinersForAllLocalSources = (input: {
+  localSourceIds: readonly Id<Source>[];
+  creeps: readonly Creep[];
+}): boolean => {
+  if (input.localSourceIds.length === 0) {
+    return false;
+  }
+
+  const localSourceIds = new Set(input.localSourceIds);
+  const staffedSourceIds = new Set<Id<Source>>();
+
+  for (const creep of input.creeps) {
+    if (creep.memory.role !== 'stationaryMiner' || !creep.memory.assignedSourceId) {
+      continue;
+    }
+
+    if (!localSourceIds.has(creep.memory.assignedSourceId)) {
+      continue;
+    }
+
+    staffedSourceIds.add(creep.memory.assignedSourceId);
+  }
+
+  return input.localSourceIds.every((sourceId) => staffedSourceIds.has(sourceId));
+};
+
+const hasSourceAssignedBootstrapBuilderHandoff = (input: {
+  localSourceIds: readonly Id<Source>[];
+  assignments: RoomDomainMemory['economy']['bootstrap']['assignments'];
+}): boolean => {
+  if (input.localSourceIds.length === 0) {
+    return false;
+  }
+
+  const localSourceIds = new Set(input.localSourceIds);
+
+  return Object.values(input.assignments).every((assignment) => {
+    return (
+      assignment.assignmentClass === 'bootstrap-builder' &&
+      assignment.sourceId !== null &&
+      localSourceIds.has(assignment.sourceId)
+    );
+  });
+};
+
+const hasCompletedStationaryTransitionSourceWork = (input: {
+  localSourceIds: readonly Id<Source>[];
+  sourceRecords: RoomDomainMemory['economy']['sourceRecords'];
+}): boolean => {
+  if (input.localSourceIds.length === 0) {
+    return false;
+  }
+
+  return input.localSourceIds.every((sourceId) => {
+    const sourceRecord = input.sourceRecords[sourceId];
+
+    return sourceRecord?.state === 'road-bootstrap' || sourceRecord?.state === 'logistics-active';
+  });
+};
+
+const hasStationaryTransitionRecoveryLabor = (input: {
+  creeps: readonly Creep[];
+  assignments: RoomDomainMemory['economy']['bootstrap']['assignments'];
+}): boolean => {
+  return input.creeps.some((creep) => {
+    const assignmentClass =
+      input.assignments[creep.name]?.assignmentClass ?? creep.memory.bootstrapAssignmentClass;
+
+    if (assignmentClass === 'shuttle') {
+      return true;
+    }
+
+    if (assignmentClass === 'bootstrap-builder' || assignmentClass === 'overflow-build-hauler') {
+      return false;
+    }
+
+    return (
+      creep.memory.role === 'generalist' ||
+      creep.memory.role === 'worker' ||
+      creep.memory.role === 'routeHauler'
+    );
+  });
+};
+
+const repurposeCompletedBootstrapCreeps = (input: {
+  roomMemory: RoomDomainMemory;
+  creeps: readonly Creep[];
+}): void => {
+  for (const creep of input.creeps) {
+    const assignment = input.roomMemory.economy.bootstrap.assignments[creep.name];
+    const assignmentClass = assignment?.assignmentClass ?? creep.memory.bootstrapAssignmentClass;
+
+    if (!assignmentClass) {
+      continue;
+    }
+
+    const sourceId = assignment?.sourceId ?? creep.memory.assignedSourceId ?? null;
+    const slotKey = assignment?.slotKey ?? creep.memory.bootstrapSlotKey ?? null;
+
+    if (assignmentClass === 'shuttle' && sourceId && slotKey) {
+      const slot = input.roomMemory.economy.bootstrap.sourceSlots[sourceId]?.[slotKey];
+
+      if (slot?.occupantCreepName === creep.name) {
+        slot.occupantCreepName = null;
+        slot.claimState = 'open';
+        slot.reservedAtTick = 0;
+      }
+    }
+
+    delete input.roomMemory.economy.bootstrap.assignments[creep.name];
+    creep.memory.role = 'worker';
+    delete creep.memory.bootstrapAssignmentClass;
+    delete creep.memory.bootstrapDeliveryMode;
+    delete creep.memory.bootstrapSlotKey;
+  }
 };
 
 const reserveBootstrapSlot = (
@@ -667,6 +1235,48 @@ const reserveBootstrapSlot = (
   return slotKey;
 };
 
+const repairPendingBootstrapShuttleSlots = (input: {
+  roomMemory: RoomDomainMemory;
+  spawningCreepNames: ReadonlySet<string>;
+}): void => {
+  for (const creepName of input.spawningCreepNames) {
+    const assignment = input.roomMemory.economy.bootstrap.assignments[creepName];
+
+    if (
+      assignment?.assignmentClass !== 'shuttle' ||
+      assignment.sourceId === null ||
+      assignment.slotKey === null
+    ) {
+      continue;
+    }
+
+    const reservedSlot = input.roomMemory.economy.bootstrap.sourceSlots[assignment.sourceId]?.[
+      assignment.slotKey
+    ];
+
+    if (reservedSlot) {
+      continue;
+    }
+
+    const repairedSlotKey = reserveBootstrapSlot(input.roomMemory, assignment.sourceId, creepName);
+
+    if (!repairedSlotKey) {
+      continue;
+    }
+
+    assignment.slotKey = repairedSlotKey;
+
+    const pendingCreepMemory = Memory.creeps?.[creepName];
+
+    if (
+      pendingCreepMemory?.bootstrapAssignmentClass === 'shuttle' &&
+      pendingCreepMemory.assignedSourceId === assignment.sourceId
+    ) {
+      pendingCreepMemory.bootstrapSlotKey = repairedSlotKey;
+    }
+  }
+};
+
 const matchBootstrapFetchRequests = (
   roomMemory: RoomDomainMemory,
   creepsByName: Map<string, Creep>,
@@ -684,7 +1294,22 @@ const matchBootstrapFetchRequests = (
 
     const shuttleName = Object.values(roomMemory.economy.bootstrap.assignments)
       .filter((assignment) => {
-        return assignment.assignmentClass === 'shuttle' && assignment.deliveryMode === 'deliver';
+        if (assignment.assignmentClass !== 'shuttle') {
+          return false;
+        }
+
+        if (
+          assignment.deliveryMode !== 'deliver' &&
+          assignment.deliveryMode !== 'build' &&
+          assignment.deliveryMode !== 'harvest' &&
+          assignment.deliveryMode !== 'charge'
+        ) {
+          return false;
+        }
+
+        const shuttle = creepsByName.get(assignment.creepName);
+
+        return (shuttle?.store.getUsedCapacity(RESOURCE_ENERGY) ?? 0) > 0;
       })
       .map((assignment) => assignment.creepName)
       .sort((left, right) => {
@@ -709,6 +1334,35 @@ const matchBootstrapFetchRequests = (
 
     if (shuttleAssignment) {
       shuttleAssignment.deliveryMode = 'rerouted';
+    }
+  }
+};
+
+const setBootstrapDeliveryMode = (
+  creep: Creep,
+  assignment: RoomDomainMemory['economy']['bootstrap']['assignments'][string],
+  deliveryMode: BootstrapDeliveryMode,
+): void => {
+  assignment.deliveryMode = deliveryMode;
+  creep.memory.bootstrapDeliveryMode = deliveryMode;
+};
+
+const clearBootstrapReroute = (
+  roomMemory: RoomDomainMemory,
+  shuttleName: string,
+  targetHaulerName: string,
+): void => {
+  delete roomMemory.economy.bootstrap.reroutes[shuttleName];
+  delete roomMemory.economy.bootstrap.fetchRequests[targetHaulerName];
+};
+
+const clearInactiveBootstrapFetchState = (roomMemory: RoomDomainMemory): void => {
+  roomMemory.economy.bootstrap.fetchRequests = {};
+  roomMemory.economy.bootstrap.reroutes = {};
+
+  for (const assignment of Object.values(roomMemory.economy.bootstrap.assignments)) {
+    if (assignment.assignmentClass === 'shuttle' && assignment.deliveryMode === 'rerouted') {
+      assignment.deliveryMode = 'deliver';
     }
   }
 };
@@ -746,7 +1400,7 @@ const reevaluateSourceRecord = (
       toPersistedRoomPosition(container?.pos ?? null) ?? sourceRecord.containerPosition,
     roadAnchor: toPersistedRoomPosition(road?.pos ?? null) ?? sourceRecord.roadAnchor,
     designatedMiningTile:
-      toPersistedRoomPosition(assignedMiner?.pos ?? null) ?? sourceRecord.designatedMiningTile,
+      sourceRecord.designatedMiningTile ?? toPersistedRoomPosition(assignedMiner?.pos ?? null),
   };
 
   return advanceSourceState(observedRecord, {
@@ -848,13 +1502,50 @@ const runBootstrapShuttle = (
   }
 
   if (creep.store.getUsedCapacity(RESOURCE_ENERGY) === 0) {
-    assignment.deliveryMode = 'harvest';
+    setBootstrapDeliveryMode(creep, assignment, 'harvest');
+
+    if (moveToPersistedRoomPosition(creep, parsePersistedRoomPosition(assignment.slotKey, room.name))) {
+      return;
+    }
+
     runHarvestFromAssignment(creep);
     return;
   }
 
+  const reroute = roomMemory.economy.bootstrap.reroutes[creep.name];
+
+  if (reroute) {
+    const request = roomMemory.economy.bootstrap.fetchRequests[reroute.targetHaulerName];
+
+    if (request?.assignedShuttleName !== creep.name || request.status !== 'matched') {
+      delete roomMemory.economy.bootstrap.reroutes[creep.name];
+    } else {
+      setBootstrapDeliveryMode(creep, assignment, 'rerouted');
+      const hauler = Game.creeps[reroute.targetHaulerName];
+
+      if (hauler) {
+        const transferResult = creep.transfer(hauler, RESOURCE_ENERGY);
+
+        if (transferResult === ERR_NOT_IN_RANGE) {
+          creep.moveTo(hauler);
+          return;
+        }
+
+        if (transferResult === OK) {
+          setBootstrapDeliveryMode(creep, assignment, 'deliver');
+          clearBootstrapReroute(roomMemory, creep.name, reroute.targetHaulerName);
+          return;
+        }
+
+        clearBootstrapReroute(roomMemory, creep.name, reroute.targetHaulerName);
+      } else {
+        clearBootstrapReroute(roomMemory, creep.name, reroute.targetHaulerName);
+      }
+    }
+  }
+
   if (roomMemory.economy.bootstrap.phase === 'exit-charge') {
-    assignment.deliveryMode = 'charge';
+    setBootstrapDeliveryMode(creep, assignment, 'charge');
     const target = findTransferTarget(creep);
 
     if (target) {
@@ -864,31 +1555,17 @@ const runBootstrapShuttle = (
     return;
   }
 
-  const reroute = roomMemory.economy.bootstrap.reroutes[creep.name];
-
-  if (reroute) {
-    assignment.deliveryMode = 'rerouted';
-    const hauler = Game.creeps[reroute.targetHaulerName];
-
-    if (hauler) {
-      if (creep.transfer(hauler, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
-        creep.moveTo(hauler);
-      }
-      return;
-    }
-  }
-
   const activeSite = getConstructionSites(room).find((site) => {
     return site.id === roomMemory.economy.bootstrap.activeExtensionSiteId;
   });
 
   if (roomMemory.economy.bootstrap.phase === 'extension-build' && activeSite) {
-    assignment.deliveryMode = 'build';
+    setBootstrapDeliveryMode(creep, assignment, 'build');
     runBuild(creep, { target: activeSite });
     return;
   }
 
-  assignment.deliveryMode = 'deliver';
+  setBootstrapDeliveryMode(creep, assignment, 'deliver');
   const target = findTransferTarget(creep);
 
   if (target) {
@@ -898,36 +1575,83 @@ const runBootstrapShuttle = (
   }
 };
 
-const runBootstrapBuilder = (creep: Creep, room: Room): void => {
+const runBootstrapBuilder = (
+  creep: Creep,
+  room: Room,
+  sourceRecords: RoomDomainMemory['economy']['sourceRecords'],
+): void => {
   if (moveToAssignedRoom(creep)) {
     return;
   }
 
   if (creep.store.getUsedCapacity(RESOURCE_ENERGY) === 0) {
-    const dropped = room.find(FIND_DROPPED_RESOURCES).find((resource) => {
-      return resource.resourceType === RESOURCE_ENERGY;
-    });
+    const assignedSource = getAssignedSource(creep);
+    const assignedSourceRecord = creep.memory.assignedSourceId
+      ? sourceRecords[creep.memory.assignedSourceId]
+      : null;
+    const assignedMinerAlive = Boolean(
+      creep.memory.assignedSourceId && assignedSourceRecord?.assignedMinerName,
+    );
+
+    if (creep.memory.assignedSourceId) {
+      const container = assignedSourceRecord?.containerId
+        ? Game.getObjectById(assignedSourceRecord.containerId)
+        : null;
+      const containerHasEnergy = (container?.store.getUsedCapacity(RESOURCE_ENERGY) ?? 0) > 0;
+
+      if (container && containerHasEnergy) {
+        runWithdraw(creep, { target: container });
+        return;
+      }
+    }
+
+    const dropped =
+      getAssignedSourceDroppedEnergy(room, assignedSource) ??
+      (assignedSource === null
+        ? (room.find(FIND_DROPPED_RESOURCES) as Resource<ResourceConstant>[]).find((resource) => {
+            return resource.resourceType === RESOURCE_ENERGY;
+          }) ?? null
+        : null);
 
     if (dropped) {
       const pickupResult = creep.pickup(dropped);
 
-      if (pickupResult === OK || pickupResult === ERR_NOT_IN_RANGE) {
+      if (pickupResult === ERR_NOT_IN_RANGE) {
+        creep.moveTo(dropped);
         return;
       }
+
+      if (pickupResult === OK) {
+        return;
+      }
+    }
+
+    if (assignedMinerAlive) {
+      return;
     }
 
     runWithdraw(creep);
     return;
   }
 
-  const site = getConstructionSites(room)[0];
+  const assignedSource = getAssignedSource(creep);
+  const assignedSourceRecord = creep.memory.assignedSourceId
+    ? sourceRecords[creep.memory.assignedSourceId]
+    : null;
+
+  const site = assignedSourceRecord
+    ? getAssignedSourceConstructionSite(room, assignedSource, assignedSourceRecord)
+    : getConstructionSites(room)[0];
 
   if (site) {
     runBuild(creep, { target: site });
   }
 };
 
-const runStationaryMiner = (creep: Creep): void => {
+const runStationaryMiner = (
+  creep: Creep,
+  sourceRecords: RoomDomainMemory['economy']['sourceRecords'],
+): void => {
   if (moveToAssignedRoom(creep)) {
     return;
   }
@@ -935,6 +1659,13 @@ const runStationaryMiner = (creep: Creep): void => {
   const source = getAssignedSource(creep);
 
   if (!source) {
+    return;
+  }
+
+  const sourceRecord = creep.memory.assignedSourceId ? sourceRecords[creep.memory.assignedSourceId] : null;
+  const miningPosition = sourceRecord?.designatedMiningTile ?? sourceRecord?.containerPosition ?? null;
+
+  if (moveToPersistedRoomPosition(creep, miningPosition)) {
     return;
   }
 
@@ -1196,12 +1927,32 @@ export const createWorkerRoomProcess = (roomName: string): KernelProcess => {
       ensureLocalSourceRecords(room, localSources);
 
       const creeps = getManagedCreeps(room);
-      const liveCreepNames = new Set(creeps.map((creep) => creep.name));
+      const activeBootstrapCreepNames = new Set(creeps.map((creep) => creep.name));
+      const spawningBootstrapCreepNames = new Set<string>();
 
-      ensureBootstrapSourceSlots(roomMemory, localSources);
-      cleanupDeadBootstrapAssignments(roomMemory, liveCreepNames);
+      if (Object.keys(roomMemory.economy.bootstrap.assignments).some((creepName) => {
+        return !activeBootstrapCreepNames.has(creepName);
+      })) {
+        for (const spawn of getOwnedSpawns(room)) {
+          const spawningName = spawn.spawning?.name;
 
-      const economy = roomMemory.economy;
+          if (spawningName) {
+            activeBootstrapCreepNames.add(spawningName);
+            spawningBootstrapCreepNames.add(spawningName);
+          }
+        }
+      }
+
+      ensureBootstrapSourceSlots(roomMemory, room, localSources);
+      cleanupDeadBootstrapAssignments(roomMemory, activeBootstrapCreepNames);
+      repairPendingBootstrapShuttleSlots({
+        roomMemory,
+        spawningCreepNames: spawningBootstrapCreepNames,
+      });
+      syncBootstrapAssignmentsFromCreeps(roomMemory, creeps);
+
+        const economy = roomMemory.economy;
+        const previousBootstrapPhase = economy.bootstrap.phase;
       seedVisibleRemoteSourceRecords(room, economy);
 
       const structuralChanged = detectStructuralEnvelopeChange(
@@ -1235,18 +1986,32 @@ export const createWorkerRoomProcess = (roomName: string): KernelProcess => {
         economy.lastStructuralReviewTick = Game.time;
       }
 
-      economy.bootstrap.phase = deriveBootstrapPhase({
-        controllerLevel: snapshot.controllerLevel,
-        extensionCount: shouldRunStructuralReview
-          ? countExtensions(room)
-          : snapshot.extensionBuildoutComplete
-            ? 5
-            : 0,
-        energyAvailable: room.energyAvailable,
-        energyCapacityAvailable: room.energyCapacityAvailable,
-        localSourceIds: snapshot.localSourceIds,
-        stationaryTransitionComplete: false,
-      });
+      const deriveLatchedBootstrapPhase = (
+        stationaryTransitionComplete: boolean,
+      ): RoomDomainMemory['economy']['bootstrap']['phase'] => {
+        if (previousBootstrapPhase === 'complete' || stationaryTransitionComplete) {
+          return 'complete';
+        }
+
+        if (previousBootstrapPhase === 'stationary-transition') {
+          return 'stationary-transition';
+        }
+
+        return deriveBootstrapPhase({
+          controllerLevel: snapshot.controllerLevel,
+          extensionCount: shouldRunStructuralReview
+            ? countExtensions(room)
+            : snapshot.extensionBuildoutComplete
+              ? 5
+              : 0,
+          energyAvailable: room.energyAvailable,
+          energyCapacityAvailable: room.energyCapacityAvailable,
+          localSourceIds: snapshot.localSourceIds,
+          stationaryTransitionComplete: false,
+        });
+      };
+
+      economy.bootstrap.phase = deriveLatchedBootstrapPhase(false);
 
       syncSourceAssignments(economy, creeps);
 
@@ -1255,6 +2020,9 @@ export const createWorkerRoomProcess = (roomName: string): KernelProcess => {
       }
 
       ensureSingleBootstrapExtensionSite(room, roomMemory);
+      const allowLocalSourceInfrastructurePlanning =
+        !economy.localSourceHardeningComplete &&
+        (economy.bootstrap.phase === 'stationary-transition' || previousBootstrapPhase === 'complete');
 
       for (const localSource of localSources) {
         const sourceRecord = economy.sourceRecords[localSource.id];
@@ -1263,7 +2031,9 @@ export const createWorkerRoomProcess = (roomName: string): KernelProcess => {
           continue;
         }
 
-        const plannedRecord = ensureSourceInfrastructureSites(room, localSource, sourceRecord);
+        const plannedRecord = allowLocalSourceInfrastructurePlanning
+          ? ensureSourceInfrastructureSites(room, localSource, sourceRecord)
+          : sourceRecord;
         economy.sourceRecords[localSource.id] = reevaluateSourceRecord(
           plannedRecord,
           localSource,
@@ -1298,6 +2068,7 @@ export const createWorkerRoomProcess = (roomName: string): KernelProcess => {
         economy,
         snapshot.localSourceIds,
       );
+      economy.bootstrap.phase = deriveLatchedBootstrapPhase(economy.localSourceHardeningComplete);
       economy.phase = deriveRoomPhase({
         room: economy,
         extensionBuildoutComplete: economy.extensionBuildoutComplete,
@@ -1311,24 +2082,76 @@ export const createWorkerRoomProcess = (roomName: string): KernelProcess => {
       );
 
       const creepsByName = new Map(creeps.map((creep) => [creep.name, creep] as const));
+      const bootstrapPhaseBeforeHandoff = roomMemory.economy.bootstrap.phase;
+      const allLocalSourcesHaveStationaryMiners = hasStaffedStationaryMinersForAllLocalSources({
+        localSourceIds: snapshot.localSourceIds,
+        creeps,
+      });
+
+      if (
+        bootstrapPhaseBeforeHandoff === 'stationary-transition' &&
+        allLocalSourcesHaveStationaryMiners
+      ) {
+        handoffLegacyBootstrapWorkersToStationaryBuilders({
+          roomMemory,
+          creeps,
+          localSourceIds: snapshot.localSourceIds,
+          roomName: room.name,
+        });
+      }
+
+      const stationaryTransitionComplete =
+        economy.localSourceHardeningComplete ||
+        (allLocalSourcesHaveStationaryMiners &&
+          hasCompletedStationaryTransitionSourceWork({
+            localSourceIds: snapshot.localSourceIds,
+            sourceRecords: economy.sourceRecords,
+          }) &&
+          hasSourceAssignedBootstrapBuilderHandoff({
+            localSourceIds: snapshot.localSourceIds,
+            assignments: roomMemory.economy.bootstrap.assignments,
+          }));
+
+      roomMemory.economy.bootstrap.phase = deriveLatchedBootstrapPhase(
+        stationaryTransitionComplete,
+      );
+
+      const bootstrapPhase = roomMemory.economy.bootstrap.phase;
+
+      if (bootstrapPhase === 'complete' && previousBootstrapPhase === 'complete') {
+        repurposeCompletedBootstrapCreeps({ roomMemory, creeps });
+      }
+
+      if (bootstrapPhase !== 'extension-build' && bootstrapPhase !== 'exit-charge') {
+        clearInactiveBootstrapFetchState(roomMemory);
+      }
+
       matchBootstrapFetchRequests(roomMemory, creepsByName);
 
       roomMemory.lastSeenTick = Game.time;
       room.memory.workerCount = creeps.length;
 
       let bootstrapSpawnHandled = false;
+      const shouldRunBootstrapSpawnPlanner =
+        bootstrapPhase === 'bootstrap-shuttle' ||
+        bootstrapPhase === 'extension-build' ||
+        bootstrapPhase === 'exit-charge' ||
+        bootstrapPhase === 'stationary-transition';
+      const minimumBootstrapSpawnPlannerEnergy = bootstrapPhase === 'stationary-transition' ? 200 : 250;
       const openSlotCount = countOpenBootstrapSlots(roomMemory.economy.bootstrap.sourceSlots);
+      const liveAndPendingShuttleCount = countBootstrapAssignmentsByClass(
+        roomMemory.economy.bootstrap.assignments,
+        'shuttle',
+      );
 
-      if (room.energyAvailable >= 250 && openSlotCount > 0) {
-        const assignmentClass = classifyBootstrapSpawn({
-          phase: roomMemory.economy.bootstrap.phase,
-          openSlotCount,
-        });
+      if (room.energyAvailable >= minimumBootstrapSpawnPlannerEnergy && shouldRunBootstrapSpawnPlanner) {
+        const idleSpawn = getIdleSpawn(room);
 
-        if (assignmentClass === 'shuttle') {
-          const idleSpawn = getIdleSpawn(room);
-
-          if (idleSpawn) {
+        if (idleSpawn) {
+          if (
+            bootstrapPhase === 'bootstrap-shuttle' &&
+            liveAndPendingShuttleCount < BOOTSTRAP_SHUTTLE_CAP
+          ) {
             const sourceId = chooseBootstrapShuttleSource({
               localSourceIds: snapshot.localSourceIds,
               assignments: roomMemory.economy.bootstrap.assignments,
@@ -1360,6 +2183,196 @@ export const createWorkerRoomProcess = (roomName: string): KernelProcess => {
                     slot.reservedAtTick = 0;
                   }
                 } else {
+                  roomMemory.economy.bootstrap.assignments[creepName] = {
+                    creepName,
+                    assignmentClass: 'shuttle',
+                    sourceId,
+                    slotKey,
+                    deliveryMode: 'harvest',
+                  };
+                  bootstrapSpawnHandled = true;
+                }
+              }
+            }
+          } else if (
+            bootstrapPhase === 'extension-build' ||
+            bootstrapPhase === 'exit-charge'
+          ) {
+            const assignmentClass = classifyBootstrapSpawn({
+              phase: bootstrapPhase,
+              openSlotCount,
+            });
+            const overflowDeliveryMode: BootstrapDeliveryMode =
+              bootstrapPhase === 'exit-charge' ? 'charge' : 'build';
+
+            if (assignmentClass === 'shuttle') {
+              const sourceId = chooseBootstrapShuttleSource({
+                localSourceIds: snapshot.localSourceIds,
+                assignments: roomMemory.economy.bootstrap.assignments,
+                sourceSlots: roomMemory.economy.bootstrap.sourceSlots,
+              });
+
+              if (sourceId) {
+                const creepName = `bootstrap-${Game.time}`;
+                const slotKey = reserveBootstrapSlot(roomMemory, sourceId, creepName);
+
+                if (slotKey) {
+                  const spawnResult = idleSpawn.spawnCreep(BOOTSTRAP_SHUTTLE_BODY, creepName, {
+                    memory: {
+                      role: 'worker',
+                      assignedSourceId: sourceId,
+                      bootstrapAssignmentClass: 'shuttle',
+                      bootstrapSlotKey: slotKey,
+                      bootstrapDeliveryMode: 'harvest',
+                      homeRoomName: room.name,
+                    },
+                  });
+
+                  if (spawnResult !== OK) {
+                    const slot = roomMemory.economy.bootstrap.sourceSlots[sourceId]?.[slotKey];
+
+                    if (slot) {
+                      slot.claimState = 'open';
+                      slot.occupantCreepName = null;
+                      slot.reservedAtTick = 0;
+                    }
+                  } else {
+                    roomMemory.economy.bootstrap.assignments[creepName] = {
+                      creepName,
+                      assignmentClass: 'shuttle',
+                      sourceId,
+                      slotKey,
+                      deliveryMode: 'harvest',
+                    };
+                    bootstrapSpawnHandled = true;
+                  }
+                }
+              }
+            }
+
+            if (assignmentClass === 'overflow-build-hauler') {
+              const creepName = `bootstrap-${Game.time}`;
+              const spawnResult = idleSpawn.spawnCreep(BOOTSTRAP_SHUTTLE_BODY, creepName, {
+                memory: {
+                  role: 'worker',
+                  bootstrapAssignmentClass: 'overflow-build-hauler',
+                  bootstrapDeliveryMode: overflowDeliveryMode,
+                  homeRoomName: room.name,
+                },
+              });
+
+              if (spawnResult === OK) {
+                roomMemory.economy.bootstrap.assignments[creepName] = {
+                  creepName,
+                  assignmentClass: 'overflow-build-hauler',
+                  sourceId: null,
+                  slotKey: null,
+                  deliveryMode: overflowDeliveryMode,
+                };
+                bootstrapSpawnHandled = true;
+              }
+            }
+
+          } else if (bootstrapPhase === 'stationary-transition') {
+            const sourceId = snapshot.localSourceIds.find((candidateSourceId) => {
+              return !creeps.some((creep) => {
+                return (
+                  creep.memory.role === 'stationaryMiner' &&
+                  creep.memory.assignedSourceId === candidateSourceId
+                );
+              });
+            });
+
+            if (sourceId) {
+              const creepName = `stationaryMiner-${Game.time}`;
+              const spawnResult = idleSpawn.spawnCreep(STATIONARY_MINER_BODY, creepName, {
+                memory: {
+                  role: 'stationaryMiner',
+                  assignedSourceId: sourceId,
+                  assignedRoomName: room.name,
+                  homeRoomName: room.name,
+                },
+              });
+
+              if (spawnResult === OK) {
+                bootstrapSpawnHandled = true;
+              } else if (
+                room.energyAvailable < STATIONARY_MINER_COST &&
+                !hasStationaryTransitionRecoveryLabor({
+                  creeps,
+                  assignments: roomMemory.economy.bootstrap.assignments,
+                })
+              ) {
+                const recoverySourceId = chooseBootstrapShuttleSource({
+                  localSourceIds: snapshot.localSourceIds,
+                  assignments: roomMemory.economy.bootstrap.assignments,
+                  sourceSlots: roomMemory.economy.bootstrap.sourceSlots,
+                });
+
+                if (recoverySourceId) {
+                  const recoveryCreepName = `bootstrap-${Game.time}`;
+                  const slotKey = reserveBootstrapSlot(roomMemory, recoverySourceId, recoveryCreepName);
+
+                  if (slotKey) {
+                    const recoverySpawnResult = idleSpawn.spawnCreep(BOOTSTRAP_SHUTTLE_BODY, recoveryCreepName, {
+                      memory: {
+                        role: 'worker',
+                        assignedSourceId: recoverySourceId,
+                        bootstrapAssignmentClass: 'shuttle',
+                        bootstrapSlotKey: slotKey,
+                        bootstrapDeliveryMode: 'harvest',
+                        homeRoomName: room.name,
+                      },
+                    });
+
+                    if (recoverySpawnResult !== OK) {
+                      const slot = roomMemory.economy.bootstrap.sourceSlots[recoverySourceId]?.[slotKey];
+
+                      if (slot) {
+                        slot.claimState = 'open';
+                        slot.occupantCreepName = null;
+                        slot.reservedAtTick = 0;
+                      }
+                    } else {
+                      roomMemory.economy.bootstrap.assignments[recoveryCreepName] = {
+                        creepName: recoveryCreepName,
+                        assignmentClass: 'shuttle',
+                        sourceId: recoverySourceId,
+                        slotKey,
+                        deliveryMode: 'harvest',
+                      };
+                      bootstrapSpawnHandled = true;
+                    }
+                  }
+                }
+              }
+            } else {
+              const builderSourceId = chooseStationaryTransitionBuilderSource({
+                localSourceIds: snapshot.localSourceIds,
+                assignments: roomMemory.economy.bootstrap.assignments,
+              });
+
+              if (builderSourceId) {
+                const creepName = `bootstrapBuilder-${Game.time}`;
+                const spawnResult = idleSpawn.spawnCreep(BUILDER_BODY, creepName, {
+                  memory: {
+                    role: 'bootstrapBuilder',
+                    assignedSourceId: builderSourceId,
+                    assignedRoomName: room.name,
+                    bootstrapAssignmentClass: 'bootstrap-builder',
+                    bootstrapDeliveryMode: 'build',
+                    homeRoomName: room.name,
+                  },
+                });
+
+                if (spawnResult === OK) {
+                  roomMemory.economy.bootstrap.assignments[creepName] = {
+                    creepName,
+                    assignmentClass: 'bootstrap-builder',
+                    sourceId: builderSourceId,
+                    slotKey: null,
+                    deliveryMode: 'build',
+                  };
                   bootstrapSpawnHandled = true;
                 }
               }
@@ -1368,7 +2381,7 @@ export const createWorkerRoomProcess = (roomName: string): KernelProcess => {
         }
       }
 
-      if (!bootstrapSpawnHandled) {
+      if (!bootstrapSpawnHandled && bootstrapPhase === 'complete') {
         spawnNeededCreep(room, economy, creeps, snapshot);
       }
 
@@ -1381,12 +2394,38 @@ export const createWorkerRoomProcess = (roomName: string): KernelProcess => {
         }
 
         if (assignment?.assignmentClass === 'bootstrap-builder') {
-          runBootstrapBuilder(creep, room);
+          runBootstrapBuilder(
+            creep,
+            room,
+            roomMemory.economy.sourceRecords,
+          );
           continue;
         }
 
         if (assignment?.assignmentClass === 'overflow-build-hauler') {
+          const supportsBootstrapFetch =
+            roomMemory.economy.bootstrap.phase === 'extension-build' ||
+            roomMemory.economy.bootstrap.phase === 'exit-charge';
+
+          if (!supportsBootstrapFetch) {
+            delete roomMemory.economy.bootstrap.fetchRequests[creep.name];
+            if (creep.store.getUsedCapacity(RESOURCE_ENERGY) > 0) {
+              const target = findTransferTarget(creep);
+
+              if (target) {
+                setBootstrapDeliveryMode(creep, assignment, 'deliver');
+                runTransfer(creep, { target });
+              }
+            }
+            continue;
+          }
+
           if (creep.store.getUsedCapacity(RESOURCE_ENERGY) === 0) {
+            setBootstrapDeliveryMode(
+              creep,
+              assignment,
+              roomMemory.economy.bootstrap.phase === 'exit-charge' ? 'charge' : 'build',
+            );
             roomMemory.economy.bootstrap.fetchRequests[creep.name] ??= {
               creepName: creep.name,
               status: 'pending',
@@ -1400,18 +2439,35 @@ export const createWorkerRoomProcess = (roomName: string): KernelProcess => {
             return site.id === roomMemory.economy.bootstrap.activeExtensionSiteId;
           });
 
-          if (activeSite) {
+          if (roomMemory.economy.bootstrap.phase === 'extension-build' && activeSite) {
+            setBootstrapDeliveryMode(creep, assignment, 'build');
             runBuild(creep, { target: activeSite });
+            continue;
+          }
+
+          const target = findTransferTarget(creep);
+
+          if (target) {
+            setBootstrapDeliveryMode(
+              creep,
+              assignment,
+              roomMemory.economy.bootstrap.phase === 'exit-charge' ? 'charge' : 'deliver',
+            );
+            runTransfer(creep, { target });
           }
           continue;
         }
 
         switch (creep.memory.role) {
           case 'bootstrapBuilder':
-            runBootstrapBuilder(creep, room);
+            runBootstrapBuilder(
+              creep,
+              room,
+              roomMemory.economy.sourceRecords,
+            );
             break;
           case 'stationaryMiner':
-            runStationaryMiner(creep);
+            runStationaryMiner(creep, roomMemory.economy.sourceRecords);
             break;
           case 'routeHauler':
             runRouteHauler(creep, economy.sourceRecords);
